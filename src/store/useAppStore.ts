@@ -4,7 +4,7 @@ import type {
   Product, Order, Neighbor, AfterSale, Supplier,
   PickupStatus, PayStatus, AfterSaleType, AfterSaleStatus,
   AfterSaleItemBreakdown, DateRangeSummary, HandoverReport, PickupHistoryEntry,
-  StockMovement, StockMovementType, NeighborDetailView, OperatorAssignment,
+  StockMovement, StockMovementType, NeighborDetailView, OperatorAssignment, AnomalyOrder,
 } from '../types';
 import { mockProducts, mockOrders, mockNeighbors, mockAfterSales, mockSuppliers } from '../data/mockData';
 import { format, eachDayOfInterval, parseISO } from 'date-fns';
@@ -29,6 +29,7 @@ interface AppState {
   deleteProduct: (id: string) => void;
   toggleProductActive: (id: string) => void;
   restockProduct: (id: string, addStock: number, operator?: string) => { success: boolean; message: string };
+  adjustStock: (id: string, actualCount: number, reason: string, operator?: string) => { success: boolean; message: string; diff: number };
   addStockMovement: (productId: string, movement: Omit<StockMovement, 'id' | 'timestamp'>) => void;
   getStockMovements: (productId: string) => StockMovement[];
 
@@ -110,6 +111,7 @@ interface AppState {
   getAllBuildings: () => string[];
   getAllPickupPoints: () => string[];
   getPickupHistoryByDate: (date: string) => PickupHistoryEntry[];
+  getAnomalyOrders: (date: string) => AnomalyOrder[];
 }
 
 export const useAppStore = create<AppState>()(
@@ -241,6 +243,43 @@ export const useAppStore = create<AppState>()(
           ),
         }));
         return { success: true, message: `补货 ${addStock} 件成功` };
+      },
+
+      adjustStock: (id, actualCount, reason, operator) => {
+        const product = get().products.find((p) => p.id === id);
+        if (!product) return { success: false, message: '商品不存在', diff: 0 };
+
+        const op = operator || get().operatorName;
+        const diff = actualCount - product.stockAvailable;
+        const newStock = product.stock + diff;
+        const newAvailable = actualCount;
+        const movement: StockMovement = {
+          id: `sm-${Date.now()}`,
+          productId: id,
+          type: 'adjust' as StockMovementType,
+          quantity: Math.abs(diff),
+          stockBefore: product.stockAvailable,
+          stockAfter: newAvailable,
+          operator: op,
+          timestamp: new Date().toISOString(),
+          remark: diff !== 0 ? `盘点调整: ${diff > 0 ? '+' : ''}${diff}件, 原因: ${reason}` : `盘点确认: 无差异, ${reason}`,
+        };
+
+        set((state) => ({
+          products: state.products.map((p) =>
+            p.id === id
+              ? {
+                  ...p,
+                  stock: newStock,
+                  stockAvailable: newAvailable,
+                  isSoldOut: newAvailable <= 0 && p.isActive,
+                  sold: Math.max(0, newStock - newAvailable),
+                  stockMovements: [...p.stockMovements, movement],
+                }
+              : p
+          ),
+        }));
+        return { success: true, message: diff !== 0 ? `盘点完成，调整 ${diff > 0 ? '+' : ''}${diff} 件` : '盘点完成，库存无差异', diff };
       },
 
       addStockMovement: (productId, movement) => {
@@ -380,11 +419,12 @@ export const useAppStore = create<AppState>()(
 
       batchAssignByPickupPoint: (pickupPoint, operator, date) => {
         const pendingOrders = get().getPendingPickupOrders(date);
+        const allProducts = get().products;
         const assigned = pendingOrders.filter((o) => {
-          const firstItem = o.items[0];
-          if (!firstItem) return false;
-          const product = get().products.find((p) => p.id === firstItem.productId);
-          return product?.pickupPoint === pickupPoint;
+          return o.items.some((item) => {
+            const product = allProducts.find((p) => p.id === item.productId);
+            return product?.pickupPoint === pickupPoint;
+          });
         });
         assigned.forEach((o) => get().assignOrderOperator(o.id, operator));
         return assigned.length;
@@ -431,19 +471,26 @@ export const useAppStore = create<AppState>()(
         const { getNeighborById, orders, afterSales, getNeighborDisplayInfo } = get();
         const neighbor = getNeighborById(id);
         if (!neighbor) return null;
+        const currentInfo = getNeighborDisplayInfo(id);
 
         const neighborOrders = orders
           .filter((o) => o.neighborId === id)
           .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-        const recentOrders = neighborOrders.slice(0, 10).map((o) => ({
-          order: o,
-          items: o.items.map((it) => ({
-            productName: it.productName,
-            quantity: it.quantity,
-            subtotal: it.subtotal,
-          })),
-        }));
+        const recentOrders = neighborOrders.slice(0, 10).map((o) => {
+          const info = getNeighborDisplayInfo(o.neighborId);
+          return {
+            order: o,
+            neighborPhone: info.phone,
+            neighborBuilding: info.building,
+            neighborRoom: info.room,
+            items: o.items.map((it) => ({
+              productName: it.productName,
+              quantity: it.quantity,
+              subtotal: it.subtotal,
+            })),
+          };
+        });
 
         const neighborAfterSales = afterSales
           .filter((a) => a.neighborId === id)
@@ -467,11 +514,15 @@ export const useAppStore = create<AppState>()(
           .slice(0, 10)
           .map((o) => {
             const lastHistory = o.pickupHistory[o.pickupHistory.length - 1];
+            const info = getNeighborDisplayInfo(o.neighborId);
             return {
               orderId: o.id,
               orderNo: o.orderNo,
               pickupTime: o.pickupTime || '',
               operator: lastHistory?.operator || '未知',
+              neighborPhone: info.phone,
+              neighborBuilding: info.building,
+              neighborRoom: info.room,
               items: o.items.map((it) => ({
                 productName: it.productName,
                 quantity: it.quantity,
@@ -486,7 +537,7 @@ export const useAppStore = create<AppState>()(
         const lastOrderDate = neighborOrders[0]?.date || '-';
 
         return {
-          neighbor: { ...neighbor, ...getNeighborDisplayInfo(id) },
+          neighbor: { ...neighbor, ...currentInfo },
           recentOrders,
           recentAfterSales,
           recentPickups,
@@ -889,6 +940,128 @@ export const useAppStore = create<AppState>()(
           });
         });
         return Array.from(historyMap.values()).sort((a, b) => a.time.localeCompare(b.time));
+      },
+
+      getAnomalyOrders: (date) => {
+        const { orders, afterSales, products, suppliers, getNeighborDisplayInfo } = get();
+        const dateOrders = orders.filter((o) => o.date === date);
+        const dateAfterSales = afterSales.filter((a) => {
+          const saleDate = new Date(a.createdAt).toISOString().split('T')[0];
+          return saleDate === date;
+        });
+
+        const anomalies: AnomalyOrder[] = [];
+
+        dateOrders.forEach((order) => {
+          const orderAfterSales = dateAfterSales.filter((a) => a.orderId === order.id);
+          const neighborInfo = getNeighborDisplayInfo(order.neighborId);
+
+          const orderAmount = order.items.reduce((s, it) => s + it.price * it.quantity, 0);
+          const costBySupplier = new Map<string, number>();
+          order.items.forEach((item) => {
+            const product = products.find((p) => p.id === item.productId);
+            if (product) {
+              const current = costBySupplier.get(product.supplierId) || 0;
+              costBySupplier.set(product.supplierId, current + product.cost * item.quantity);
+            }
+          });
+
+          let supplierDeduction = 0;
+          orderAfterSales.forEach((a) => {
+            if (!a.affectsSupplier) return;
+            if (a.multiSupplier && a.supplierBreakdown.length > 0) {
+              a.supplierBreakdown.forEach((sb) => {
+                supplierDeduction += sb.amount;
+              });
+            } else {
+              supplierDeduction += a.amount;
+            }
+          });
+
+          const pendingRefund = orderAfterSales
+            .filter((a) => a.type === 'refund' && a.status === 'pending')
+            .reduce((sum, a) => sum + a.amount, 0);
+
+          const totalSupplierCost = Array.from(costBySupplier.values()).reduce((s, v) => s + v, 0);
+          const expectedIncome = orderAmount - totalSupplierCost - supplierDeduction - orderAfterSales
+            .filter((a) => a.type === 'refund')
+            .reduce((sum, a) => sum + a.amount, 0);
+
+          const issues: string[] = [];
+          if (supplierDeduction > totalSupplierCost) {
+            issues.push('供应商扣款超过供应成本');
+          }
+          if (pendingRefund > orderAmount) {
+            issues.push('待退金额超过订单金额');
+          }
+          if (orderAfterSales.some((a) => a.amount < 0)) {
+            issues.push('售后金额为负数');
+          }
+          if (order.payStatus === 'paid' && orderAmount <= 0) {
+            issues.push('已支付但订单金额为零');
+          }
+          if (orderAfterSales.some((a) => a.itemBreakdown.length === 0 && a.amount > 0)) {
+            issues.push('有售后金额但无商品明细');
+          }
+          if (order.items.some((it) => !it.supplierId)) {
+            issues.push('存在无供应商的商品');
+          }
+
+          if (issues.length > 0) {
+            const supplierBreakdownDetail = Array.from(costBySupplier.entries()).map(([supplierId, supplyCost]) => {
+              const supplier = suppliers.find((s) => s.id === supplierId);
+              const deduction = orderAfterSales
+                .filter((a) => a.affectsSupplier)
+                .reduce((sum, a) => {
+                  if (a.multiSupplier && a.supplierBreakdown.length > 0) {
+                    const sb = a.supplierBreakdown.find((s) => s.supplierId === supplierId);
+                    return sum + (sb?.amount || 0);
+                  }
+                  if (a.supplierId === supplierId) return sum + a.amount;
+                  return sum;
+                }, 0);
+              return {
+                supplierId,
+                supplierName: supplier?.name || supplierId,
+                supplyCost,
+                deduction,
+                settlement: supplyCost - deduction,
+              };
+            });
+
+            anomalies.push({
+              orderId: order.id,
+              orderNo: order.orderNo,
+              neighborName: neighborInfo.name,
+              date: order.date,
+              orderAmount,
+              supplierDeduction,
+              pendingRefund,
+              leaderIncome: expectedIncome,
+              issue: issues.join('; '),
+              details: {
+                orderItems: order.items.map((it) => ({
+                  productName: it.productName,
+                  quantity: it.quantity,
+                  price: it.price,
+                  supplierId: it.supplierId,
+                  cost: it.cost,
+                })),
+                afterSales: orderAfterSales.map((a) => ({
+                  id: a.id,
+                  type: a.type,
+                  amount: a.amount,
+                  reason: a.reason,
+                  supplierId: a.supplierId,
+                  productName: a.itemBreakdown[0]?.productName || '-',
+                })),
+                supplierBreakdown: supplierBreakdownDetail,
+              },
+            });
+          }
+        });
+
+        return anomalies;
       },
     }),
     {

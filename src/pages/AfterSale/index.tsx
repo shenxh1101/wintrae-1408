@@ -22,7 +22,7 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
-import type { AfterSaleType, AfterSaleStatus, AfterSaleItemBreakdown, OrderItem } from '../../types';
+import type { AfterSaleType, AfterSaleStatus, AfterSaleItemBreakdown, OrderItem, AnomalyOrder } from '../../types';
 
 interface SelectedItem {
   itemId: string;
@@ -54,10 +54,11 @@ export default function AfterSalePage() {
     getNeighborDisplayInfo,
     setCurrentDate,
     getOrdersByDate,
+    getAnomalyOrders,
   } = useAppStore();
 
   const [showAddModal, setShowAddModal] = useState(false);
-  const [activeTab, setActiveTab] = useState<'list' | 'settlement' | 'summary'>('list');
+  const [activeTab, setActiveTab] = useState<'list' | 'settlement' | 'summary' | 'anomaly'>('list');
   const [formData, setFormData] = useState({
     type: 'out_of_stock' as AfterSaleType,
     orderId: '',
@@ -74,6 +75,21 @@ export default function AfterSalePage() {
     endDate: currentDate,
   });
   const [expandedSuppliers, setExpandedSuppliers] = useState<Set<string>>(new Set());
+  const [expandedAnomalies, setExpandedAnomalies] = useState<Set<string>>(new Set());
+
+  const anomalyOrders = useMemo(() => getAnomalyOrders(currentDate), [getAnomalyOrders, currentDate]);
+
+  const toggleAnomalyExpand = (orderId: string) => {
+    setExpandedAnomalies((prev) => {
+      const next = new Set(prev);
+      if (next.has(orderId)) {
+        next.delete(orderId);
+      } else {
+        next.add(orderId);
+      }
+      return next;
+    });
+  };
 
   const summary = getDailySummary(currentDate);
   const supplierSettlement = getSupplierSettlement(currentDate);
@@ -370,6 +386,22 @@ export default function AfterSalePage() {
           >
             <FileText size={18} />
             <span>对账汇总</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('anomaly')}
+            className={`flex-1 h-14 flex items-center justify-center gap-2 font-medium transition-colors relative ${
+              activeTab === 'anomaly'
+                ? 'text-red-600'
+                : 'text-warm-500 hover:text-red-500'
+            }`}
+          >
+            <AlertTriangle size={18} />
+            <span>异常核对</span>
+            {anomalyOrders.length > 0 && (
+              <span className="px-1.5 py-0.5 text-xs rounded-full bg-red-100 text-red-600">
+                {anomalyOrders.length}
+              </span>
+            )}
           </button>
         </div>
 
@@ -761,6 +793,186 @@ export default function AfterSalePage() {
                   <FileText size={48} className="mx-auto text-warm-300 mb-3" />
                   <p className="text-warm-500">暂无对账数据</p>
                   <p className="text-sm text-warm-400 mt-1">请选择日期范围查看</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'anomaly' && (
+            <div>
+              {anomalyOrders.length > 0 ? (
+                <div>
+                  <div className="grid grid-cols-2 gap-4 mb-5">
+                    <div className="p-4 bg-red-50 rounded-xl border border-red-200">
+                      <p className="text-sm text-red-600 mb-1">异常订单数</p>
+                      <p className="text-2xl font-bold text-red-700 tabular-nums">{anomalyOrders.length}</p>
+                    </div>
+                    <div className="p-4 bg-red-50 rounded-xl border border-red-200">
+                      <p className="text-sm text-red-600 mb-1">涉及金额合计</p>
+                      <p className="text-2xl font-bold text-red-700 tabular-nums">
+                        ¥{anomalyOrders.reduce((sum, o) => sum + o.orderAmount, 0).toFixed(2)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    {anomalyOrders.map((order, index) => {
+                      const isExpanded = expandedAnomalies.has(order.orderId);
+                      return (
+                        <div
+                          key={order.orderId}
+                          className="bg-warm-50/50 rounded-xl animate-slide-up overflow-hidden"
+                          style={{ animationDelay: `${index * 30}ms` }}
+                        >
+                          <button
+                            onClick={() => toggleAnomalyExpand(order.orderId)}
+                            className="w-full p-4 flex items-center justify-between text-left hover:bg-warm-50 transition-colors"
+                          >
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="w-10 h-10 rounded-xl bg-red-50 flex items-center justify-center shrink-0">
+                                <AlertTriangle size={20} className="text-red-500" />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-medium text-warm-800 text-sm">{order.orderNo}</span>
+                                  <span className="text-xs text-warm-500">{order.neighborName}</span>
+                                </div>
+                                <p className="text-xs text-red-500 mt-1 truncate">{order.issue}</p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-3 shrink-0 ml-3">
+                              <span className="text-sm font-bold text-warm-800 tabular-nums">
+                                ¥{order.orderAmount.toFixed(2)}
+                              </span>
+                              <ChevronDown
+                                size={18}
+                                className={`text-warm-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                              />
+                            </div>
+                          </button>
+
+                          {isExpanded && (
+                            <div className="px-4 pb-4 space-y-4 border-t border-warm-200/50 pt-4">
+                              <div>
+                                <h5 className="text-xs font-semibold text-warm-600 mb-2 uppercase tracking-wide">订单商品明细</h5>
+                                <div className="overflow-x-auto rounded-lg border border-warm-200">
+                                  <table className="w-full text-sm">
+                                    <thead>
+                                      <tr className="bg-white border-b border-warm-200">
+                                        <th className="px-3 py-2 text-left font-medium text-warm-600">商品名</th>
+                                        <th className="px-3 py-2 text-right font-medium text-warm-600">数量</th>
+                                        <th className="px-3 py-2 text-right font-medium text-warm-600">单价</th>
+                                        <th className="px-3 py-2 text-left font-medium text-warm-600">供应商ID</th>
+                                        <th className="px-3 py-2 text-right font-medium text-warm-600">成本</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {order.details.orderItems.map((item, iIdx) => (
+                                        <tr key={iIdx} className="border-b border-warm-100 last:border-b-0">
+                                          <td className="px-3 py-2 text-warm-800">{item.productName}</td>
+                                          <td className="px-3 py-2 text-right text-warm-700 tabular-nums">{item.quantity}</td>
+                                          <td className="px-3 py-2 text-right text-warm-700 tabular-nums">¥{item.price.toFixed(2)}</td>
+                                          <td className="px-3 py-2 text-warm-500 font-mono text-xs">{item.supplierId}</td>
+                                          <td className="px-3 py-2 text-right text-warm-700 tabular-nums">¥{item.cost.toFixed(2)}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+
+                              {order.details.afterSales.length > 0 && (
+                                <div>
+                                  <h5 className="text-xs font-semibold text-warm-600 mb-2 uppercase tracking-wide">售后记录</h5>
+                                  <div className="overflow-x-auto rounded-lg border border-warm-200">
+                                    <table className="w-full text-sm">
+                                      <thead>
+                                        <tr className="bg-white border-b border-warm-200">
+                                          <th className="px-3 py-2 text-center font-medium text-warm-600">类型</th>
+                                          <th className="px-3 py-2 text-left font-medium text-warm-600">商品名</th>
+                                          <th className="px-3 py-2 text-right font-medium text-warm-600">金额</th>
+                                          <th className="px-3 py-2 text-left font-medium text-warm-600">原因</th>
+                                          <th className="px-3 py-2 text-left font-medium text-warm-600">供应商ID</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {order.details.afterSales.map((as) => {
+                                          const asTypeCfg = afterSaleTypes.find((t) => t.value === as.type);
+                                          return (
+                                            <tr key={as.id} className="border-b border-warm-100 last:border-b-0">
+                                              <td className="px-3 py-2 text-center">
+                                                <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${asTypeCfg?.badgeColor || 'bg-warm-100 text-warm-600'}`}>
+                                                  {asTypeCfg?.label || as.type}
+                                                </span>
+                                              </td>
+                                              <td className="px-3 py-2 text-warm-800">{as.productName}</td>
+                                              <td className="px-3 py-2 text-right text-danger-500 font-medium tabular-nums">-¥{as.amount.toFixed(2)}</td>
+                                              <td className="px-3 py-2 text-warm-500 text-xs max-w-[160px] truncate" title={as.reason}>{as.reason}</td>
+                                              <td className="px-3 py-2 text-warm-500 font-mono text-xs">{as.supplierId}</td>
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </div>
+                              )}
+
+                              {order.details.supplierBreakdown.length > 0 && (
+                                <div>
+                                  <h5 className="text-xs font-semibold text-warm-600 mb-2 uppercase tracking-wide">供应商分账</h5>
+                                  <div className="overflow-x-auto rounded-lg border border-warm-200">
+                                    <table className="w-full text-sm">
+                                      <thead>
+                                        <tr className="bg-white border-b border-warm-200">
+                                          <th className="px-3 py-2 text-left font-medium text-warm-600">供应商名</th>
+                                          <th className="px-3 py-2 text-right font-medium text-warm-600">供应成本</th>
+                                          <th className="px-3 py-2 text-right font-medium text-warm-600">扣款</th>
+                                          <th className="px-3 py-2 text-right font-medium text-warm-600">应结算</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {order.details.supplierBreakdown.map((sb, sbIdx) => (
+                                          <tr key={sbIdx} className="border-b border-warm-100 last:border-b-0">
+                                            <td className="px-3 py-2 text-warm-800">{sb.supplierName}</td>
+                                            <td className="px-3 py-2 text-right text-warm-700 tabular-nums">¥{sb.supplyCost.toFixed(2)}</td>
+                                            <td className="px-3 py-2 text-right text-danger-500 tabular-nums">-¥{sb.deduction.toFixed(2)}</td>
+                                            <td className="px-3 py-2 text-right font-medium text-secondary-600 tabular-nums">
+                                              ¥{(sb.supplyCost - sb.deduction).toFixed(2)}
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="mt-5 p-4 bg-gradient-to-r from-red-500 to-red-600 rounded-xl text-white">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm text-white/80 mb-1">团长预估收入</p>
+                        <p className="text-2xl font-bold tabular-nums">
+                          ¥{anomalyOrders.reduce((sum, o) => sum + o.leaderIncome, 0).toFixed(2)}
+                        </p>
+                      </div>
+                      <div className="text-right text-white/70 text-xs leading-relaxed">
+                        <p>计算公式:</p>
+                        <p>团长收入 = 订单金额 - 供应商成本 - 售后扣款</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center py-12">
+                  <div className="text-5xl mb-3">✅</div>
+                  <p className="text-warm-500">暂无异常，对账数据一致</p>
                 </div>
               )}
             </div>

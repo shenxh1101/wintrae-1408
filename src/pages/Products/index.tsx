@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { format, addDays, subDays, isToday } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import {
@@ -22,9 +22,20 @@ import {
   BarChart3,
   RefreshCw,
   History,
+  ClipboardCheck,
+  CheckCircle,
+  AlertCircle,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import type { Product, StockMovement, StockMovementType } from '../../types';
+
+type ToastType = 'success' | 'error' | 'info';
+
+interface Toast {
+  id: number;
+  type: ToastType;
+  message: string;
+}
 
 const movementTypeConfig: Record<StockMovementType, { label: string; bgColor: string; textColor: string; borderColor: string }> = {
   restock: { label: '补货', bgColor: 'bg-green-50', textColor: 'text-green-700', borderColor: 'border-green-200' },
@@ -45,6 +56,7 @@ export default function ProductsPage() {
     getProductsByDate,
     toggleProductActive,
     restockProduct,
+    adjustStock,
     getStockMovements,
     setCurrentDate,
     getAllPickupPoints,
@@ -53,10 +65,17 @@ export default function ProductsPage() {
   const [showModal, setShowModal] = useState(false);
   const [showRestockModal, setShowRestockModal] = useState(false);
   const [showStockMovementsModal, setShowStockMovementsModal] = useState(false);
+  const [showInventoryCheckModal, setShowInventoryCheckModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [stockMovementsProduct, setStockMovementsProduct] = useState<Product | null>(null);
   const [restockingProduct, setRestockingProduct] = useState<Product | null>(null);
   const [restockQuantity, setRestockQuantity] = useState(1);
+  const [inventoryCheckProduct, setInventoryCheckProduct] = useState<Product | null>(null);
+  const [inventoryActualCount, setInventoryActualCount] = useState(0);
+  const [inventoryReason, setInventoryReason] = useState('');
+  const [inventoryOperator, setInventoryOperator] = useState('');
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const toastIdRef = useRef(0);
   const [selectedPickupPoint, setSelectedPickupPoint] = useState<string>('all');
   const [selectedSupplier, setSelectedSupplier] = useState<string>('all');
   const [formData, setFormData] = useState({
@@ -158,12 +177,44 @@ export default function ProductsPage() {
     setShowStockMovementsModal(true);
   };
 
+  const openInventoryCheckModal = (product: Product) => {
+    setInventoryCheckProduct(product);
+    setInventoryActualCount(product.stockAvailable);
+    setInventoryReason('');
+    setInventoryOperator(operatorName);
+    setShowInventoryCheckModal(true);
+  };
+
+  const showToast = (type: ToastType, message: string) => {
+    const id = ++toastIdRef.current;
+    setToasts((prev) => [...prev, { id, type, message }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 2500);
+  };
+
+  const removeToast = (id: number) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
+
   const handleRestock = () => {
     if (!restockingProduct || restockQuantity <= 0) return;
     const result = restockProduct(restockingProduct.id, restockQuantity, operatorName);
     if (result.success) {
       setShowRestockModal(false);
       setRestockingProduct(null);
+    }
+  };
+
+  const handleInventoryCheck = () => {
+    if (!inventoryCheckProduct) return;
+    const result = adjustStock(inventoryCheckProduct.id, inventoryActualCount, inventoryReason, inventoryOperator);
+    if (result.success) {
+      showToast('success', result.message);
+      setShowInventoryCheckModal(false);
+      setInventoryCheckProduct(null);
+    } else {
+      showToast('error', result.message);
     }
   };
 
@@ -187,6 +238,31 @@ export default function ProductsPage() {
 
   return (
     <div className="space-y-6 animate-fade-in">
+      <div className="fixed top-4 right-4 z-50 space-y-2">
+        {toasts.map((toast) => (
+          <div
+            key={toast.id}
+            className={`flex items-center gap-3 px-5 py-3 rounded-2xl shadow-lg animate-slide-in-right ${
+              toast.type === 'success'
+                ? 'bg-success-500 text-white'
+                : toast.type === 'error'
+                ? 'bg-danger-500 text-white'
+                : 'bg-warm-700 text-white'
+            }`}
+          >
+            {toast.type === 'success' && <CheckCircle size={18} />}
+            {toast.type === 'error' && <AlertCircle size={18} />}
+            <span className="font-medium">{toast.message}</span>
+            <button
+              onClick={() => removeToast(toast.id)}
+              className="ml-2 opacity-70 hover:opacity-100 transition-opacity"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        ))}
+      </div>
+
       <div className="bg-white rounded-2xl shadow-card p-4 flex items-center justify-between flex-wrap gap-4">
         <div className="flex items-center gap-3 flex-wrap">
           <button
@@ -343,6 +419,7 @@ export default function ProductsPage() {
               onToggleActive={() => handleToggleActive(product.id)}
               onRestock={() => openRestockModal(product)}
               onViewStockMovements={() => openStockMovementsModal(product)}
+              onInventoryCheck={() => openInventoryCheckModal(product)}
               supplierName={getSupplierName(product.supplierId)}
             />
           ))}
@@ -668,6 +745,109 @@ export default function ProductsPage() {
           </div>
         </div>
       )}
+
+      {showInventoryCheckModal && inventoryCheckProduct && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-card-lg w-full max-w-sm animate-slide-up">
+            <div className="flex items-center justify-between p-5 border-b border-warm-100">
+              <h2 className="text-lg font-bold text-warm-800">商品盘点</h2>
+              <button
+                onClick={() => {
+                  setShowInventoryCheckModal(false);
+                  setInventoryCheckProduct(null);
+                }}
+                className="w-8 h-8 rounded-full hover:bg-warm-50 flex items-center justify-center text-warm-400 hover:text-warm-600 transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="flex items-center gap-3 p-3 bg-warm-50 rounded-xl">
+                <span className="text-3xl">{inventoryCheckProduct.image}</span>
+                <div>
+                  <p className="font-medium text-warm-800">{inventoryCheckProduct.name}</p>
+                  <p className="text-sm text-warm-500">当前库存：{inventoryCheckProduct.stockAvailable} 件</p>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-warm-700 mb-1.5">
+                  实盘数量
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  value={inventoryActualCount}
+                  onChange={(e) => setInventoryActualCount(Math.max(0, Number(e.target.value)))}
+                  className="w-full h-10 px-3 border border-warm-200 rounded-xl focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
+                  placeholder="请输入实盘数量"
+                  required
+                />
+              </div>
+
+              <div className="flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-warm-50">
+                <span className="text-sm text-warm-500">差异：</span>
+                {(() => {
+                  const diff = inventoryActualCount - inventoryCheckProduct.stockAvailable;
+                  if (diff > 0) {
+                    return <span className="text-sm font-bold text-green-600 tabular-nums">+{diff}</span>;
+                  }
+                  if (diff < 0) {
+                    return <span className="text-sm font-bold text-red-600 tabular-nums">{diff}</span>;
+                  }
+                  return <span className="text-sm font-medium text-gray-400">无差异</span>;
+                })()}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-warm-700 mb-1.5">
+                  差异原因
+                </label>
+                <textarea
+                  value={inventoryReason}
+                  onChange={(e) => setInventoryReason(e.target.value)}
+                  className="w-full h-20 px-3 py-2 border border-warm-200 rounded-xl focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100 resize-none"
+                  placeholder="请输入差异原因"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-warm-700 mb-1.5">
+                  操作人
+                </label>
+                <input
+                  type="text"
+                  value={inventoryOperator}
+                  onChange={(e) => setInventoryOperator(e.target.value)}
+                  className="w-full h-10 px-3 border border-warm-200 rounded-xl focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowInventoryCheckModal(false);
+                    setInventoryCheckProduct(null);
+                  }}
+                  className="flex-1 h-11 rounded-xl border border-warm-200 text-warm-600 font-medium hover:bg-warm-50 transition-colors btn-press"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={handleInventoryCheck}
+                  className="flex-1 h-11 rounded-xl bg-gradient-to-r from-teal-500 to-teal-600 text-white font-medium hover:from-teal-600 hover:to-teal-700 transition-all btn-press flex items-center justify-center gap-2"
+                >
+                  <ClipboardCheck size={16} />
+                  确认盘点
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -756,6 +936,7 @@ function ProductCard({
   onToggleActive,
   onRestock,
   onViewStockMovements,
+  onInventoryCheck,
   supplierName,
 }: {
   product: Product;
@@ -765,6 +946,7 @@ function ProductCard({
   onToggleActive: () => void;
   onRestock: () => void;
   onViewStockMovements: () => void;
+  onInventoryCheck: () => void;
   supplierName: string;
 }) {
   const isSoldOut = product.isActive && product.stockAvailable <= 0;
@@ -922,6 +1104,16 @@ function ProductCard({
           >
             <Edit2 size={14} />
             编辑
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onInventoryCheck();
+            }}
+            className="h-9 px-3 rounded-lg bg-teal-50 text-teal-600 text-sm font-medium hover:bg-teal-100 flex items-center justify-center gap-1 transition-colors btn-press"
+          >
+            <ClipboardCheck size={14} />
+            盘点
           </button>
           <button
             onClick={(e) => {

@@ -656,6 +656,11 @@ export default function NeighborsPage() {
                                 </span>
                               </div>
                             </div>
+                            <div className="flex items-center gap-3 text-xs text-warm-500 mb-2 bg-white rounded-lg px-2.5 py-1.5">
+                              <span className="flex items-center gap-1"><Phone size={10} />{item.neighborPhone}</span>
+                              <span className="flex items-center gap-1"><Building2 size={10} />{item.neighborBuilding}</span>
+                              <span>{item.neighborRoom}</span>
+                            </div>
                             <div className="space-y-1 mb-2">
                               {item.items.map((it, idx) => (
                                 <div key={idx} className="flex items-center justify-between text-xs">
@@ -752,6 +757,11 @@ export default function NeighborsPage() {
                                 <CheckCircle size={10} />
                                 已取货
                               </span>
+                            </div>
+                            <div className="flex items-center gap-3 text-xs text-warm-500 mb-2 bg-white rounded-lg px-2.5 py-1.5">
+                              <span className="flex items-center gap-1"><Phone size={10} />{item.neighborPhone}</span>
+                              <span className="flex items-center gap-1"><Building2 size={10} />{item.neighborBuilding}</span>
+                              <span>{item.neighborRoom}</span>
                             </div>
                             <div className="grid grid-cols-2 gap-2 mb-2">
                               <div className="bg-white rounded-lg p-2">

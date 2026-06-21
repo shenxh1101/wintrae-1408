@@ -183,6 +183,9 @@ export interface NeighborDetailView {
   neighbor: Neighbor;
   recentOrders: {
     order: Order;
+    neighborPhone: string;
+    neighborBuilding: string;
+    neighborRoom: string;
     items: { productName: string; quantity: number; subtotal: number }[];
   }[];
   recentAfterSales: {
@@ -195,6 +198,9 @@ export interface NeighborDetailView {
     orderNo: string;
     pickupTime: string;
     operator: string;
+    neighborPhone: string;
+    neighborBuilding: string;
+    neighborRoom: string;
     items: { productName: string; quantity: number }[];
   }[];
   orderStats: {
@@ -209,4 +215,21 @@ export interface OperatorAssignment {
   orderId: string;
   operator: string;
   assignedAt: string;
+}
+
+export interface AnomalyOrder {
+  orderId: string;
+  orderNo: string;
+  neighborName: string;
+  date: string;
+  orderAmount: number;
+  supplierDeduction: number;
+  pendingRefund: number;
+  leaderIncome: number;
+  issue: string;
+  details: {
+    orderItems: { productName: string; quantity: number; price: number; supplierId: string; cost: number }[];
+    afterSales: { id: string; type: AfterSaleType; amount: number; reason: string; supplierId: string; productName: string }[];
+    supplierBreakdown: { supplierId: string; supplierName: string; supplyCost: number; deduction: number; settlement: number }[];
+  };
 }

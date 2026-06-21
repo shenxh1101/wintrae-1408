@@ -39,7 +39,6 @@ export default function PickupPage() {
     getPendingPickupOrders,
     getOrdersByDate,
     pickupOrder,
-    pickupOrders,
     getNeighborDisplayInfo,
     getAllBuildings,
     getHandoverReport,
@@ -51,6 +50,7 @@ export default function PickupPage() {
     getAssignedOperator,
     setOperatorName,
     operatorName,
+    products,
   } = useAppStore();
 
   const [scanInput, setScanInput] = useState('');
@@ -69,6 +69,7 @@ export default function PickupPage() {
   const [volunteerName, setVolunteerName] = useState('');
   const [assignMode, setAssignMode] = useState<'building' | 'pickupPoint'>('building');
   const [refreshKey, setRefreshKey] = useState(0);
+  const [historyOperatorFilter, setHistoryOperatorFilter] = useState<string>('');
 
   const scanInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -96,6 +97,17 @@ export default function PickupPage() {
     if (operatorName) set.add(operatorName);
     return Array.from(set);
   }, [allOrders, getAssignedOperator, operatorName, refreshKey]);
+
+  const historyOperators = useMemo(() => {
+    const set = new Set<string>();
+    pickupHistory.forEach((h) => h.operator && set.add(h.operator));
+    return Array.from(set);
+  }, [pickupHistory]);
+
+  const filteredPickupHistory = useMemo(() => {
+    if (!historyOperatorFilter) return pickupHistory;
+    return pickupHistory.filter((h) => h.operator === historyOperatorFilter);
+  }, [pickupHistory, historyOperatorFilter]);
 
   const pendingByBuilding = useMemo(() => {
     const groups: Record<string, Order[]> = {};
@@ -174,7 +186,8 @@ export default function PickupPage() {
   };
 
   const confirmPickup = (orderId: string, isScanMode = false) => {
-    const result = pickupOrder(orderId, operatorName);
+    const effectiveOp = getAssignedOperator(orderId) || operatorName;
+    const result = pickupOrder(orderId, effectiveOp);
     if (result.success) {
       showToast('success', result.message);
       setFoundOrder(null);
@@ -189,19 +202,25 @@ export default function PickupPage() {
 
   const handleBatchPickup = (building: string) => {
     const orders = pendingByBuilding[building] || [];
-    const ids = orders.map((o) => o.id);
-    if (ids.length === 0) {
+    if (orders.length === 0) {
       showToast('info', '没有可核销的订单');
       return;
     }
-    const result = pickupOrders(ids, operatorName);
-    if (result.failed === 0) {
-      showToast('success', `${building} 已全部核销（${result.success}单）`);
+    let successCount = 0;
+    let failCount = 0;
+    orders.forEach((o) => {
+      const effectiveOp = getAssignedOperator(o.id) || operatorName;
+      const result = pickupOrder(o.id, effectiveOp);
+      if (result.success) {
+        successCount++;
+      } else {
+        failCount++;
+      }
+    });
+    if (failCount === 0) {
+      showToast('success', `${building} 已全部核销（${successCount}单）`);
     } else {
-      showToast(
-        'info',
-        `${building} 核销完成：成功 ${result.success} 单，失败 ${result.failed} 单`
-      );
+      showToast('info', `${building} 核销完成：成功 ${successCount} 单，失败 ${failCount} 单`);
     }
   };
 
@@ -971,6 +990,11 @@ export default function PickupPage() {
                           {pendingOrders.map((order) => {
                             const info = getNeighborDisplayInfo(order.neighborId);
                             const assignedOp = getAssignedOperator(order.id);
+                            const orderPickupPoints = Array.from(new Set(
+                              order.items
+                                .map((i) => products.find((p) => p.id === i.productId)?.pickupPoint)
+                                .filter(Boolean) as string[]
+                            ));
                             return (
                               <div
                                 key={order.id}
@@ -989,6 +1013,16 @@ export default function PickupPage() {
                                     <div className="text-xs text-warm-500 truncate">
                                       {order.items.map((i) => `${i.productName}×${i.quantity}`).join('、')}
                                     </div>
+                                    {orderPickupPoints.length > 0 && (
+                                      <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                                        <Package size={11} className="text-primary-400 flex-shrink-0" />
+                                        {orderPickupPoints.map((pp) => (
+                                          <span key={pp} className="text-xs text-primary-600 bg-primary-50 px-1.5 py-0.5 rounded">
+                                            {pp}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
                                   </div>
                                   <div className="flex-shrink-0 w-32">
                                     <label className="block text-xs text-warm-400 mb-1">分配志愿者</label>
@@ -1071,12 +1105,29 @@ export default function PickupPage() {
       {/* 核销操作记录 */}
       {pickupHistory.length > 0 && (
         <div className="bg-white rounded-2xl shadow-card p-5">
-          <h3 className="font-bold text-warm-800 mb-4 flex items-center gap-2">
-            <History size={18} className="text-primary-500" />
-            核销操作记录
-          </h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-bold text-warm-800 flex items-center gap-2">
+              <History size={18} className="text-primary-500" />
+              核销操作记录
+            </h3>
+            {historyOperators.length > 1 && (
+              <div className="relative">
+                <select
+                  value={historyOperatorFilter}
+                  onChange={(e) => setHistoryOperatorFilter(e.target.value)}
+                  className="h-9 pl-3 pr-8 text-sm border border-warm-200 rounded-lg bg-white focus:outline-none focus:border-primary-400 appearance-none cursor-pointer"
+                >
+                  <option value="">全部处理人</option>
+                  {historyOperators.map((op) => (
+                    <option key={op} value={op}>{op}</option>
+                  ))}
+                </select>
+                <ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 text-warm-400 pointer-events-none" />
+              </div>
+            )}
+          </div>
           <div className="space-y-2">
-            {pickupHistory.map((entry) => (
+            {filteredPickupHistory.map((entry) => (
               <div
                 key={entry.id}
                 className="flex items-center justify-between py-2 border-b border-warm-50 last:border-0"
