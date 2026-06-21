@@ -2,6 +2,7 @@ export type PayStatus = 'unpaid' | 'paid' | 'refunded';
 export type PickupStatus = 'pending' | 'picked' | 'partial';
 export type AfterSaleType = 'out_of_stock' | 'damaged' | 'refund' | 'reissue';
 export type AfterSaleStatus = 'pending' | 'processed' | 'closed';
+export type StockMovementType = 'restock' | 'sold' | 'offline' | 'online' | 'adjust';
 
 export interface PickupHistoryEntry {
   id: string;
@@ -9,6 +10,18 @@ export interface PickupHistoryEntry {
   time: string;
   action: 'pickup' | 'batch_pickup' | 'cancel';
   orderIds?: string[];
+}
+
+export interface StockMovement {
+  id: string;
+  productId: string;
+  type: StockMovementType;
+  quantity: number;
+  stockBefore: number;
+  stockAfter: number;
+  operator: string;
+  timestamp: string;
+  remark?: string;
 }
 
 export interface Product {
@@ -28,6 +41,7 @@ export interface Product {
   supplierId: string;
   isActive: boolean;
   isSoldOut: boolean;
+  stockMovements: StockMovement[];
 }
 
 export interface OrderItem {
@@ -114,9 +128,19 @@ export interface SupplierSettlement {
   supplierId: string;
   supplierName: string;
   totalSupply: number;
+  totalCost: number;
   totalRefund: number;
   settlementAmount: number;
-  deductionDetails: { afterSaleId: string; type: AfterSaleType; amount: number; reason: string }[];
+  deductionDetails: {
+    afterSaleId: string;
+    orderId: string;
+    orderNo: string;
+    type: AfterSaleType;
+    productName: string;
+    quantity: number;
+    amount: number;
+    reason: string;
+  }[];
 }
 
 export interface DateRangeSummary {
@@ -140,6 +164,7 @@ export interface HandoverReport {
     room: string;
     items: { productName: string; quantity: number }[];
     total: number;
+    assignedOperator?: string;
   }[];
   pickedList: {
     orderId: string;
@@ -148,7 +173,40 @@ export interface HandoverReport {
     room: string;
     pickupTime: string;
     items: { productName: string; quantity: number }[];
+    operator?: string;
   }[];
   pendingTotal: number;
   pickedTotal: number;
+}
+
+export interface NeighborDetailView {
+  neighbor: Neighbor;
+  recentOrders: {
+    order: Order;
+    items: { productName: string; quantity: number; subtotal: number }[];
+  }[];
+  recentAfterSales: {
+    afterSale: AfterSale;
+    orderNo: string;
+    items: { productName: string; quantity: number; amount: number }[];
+  }[];
+  recentPickups: {
+    orderId: string;
+    orderNo: string;
+    pickupTime: string;
+    operator: string;
+    items: { productName: string; quantity: number }[];
+  }[];
+  orderStats: {
+    totalOrders: number;
+    totalSpent: number;
+    avgOrderAmount: number;
+    lastOrderDate: string;
+  };
+}
+
+export interface OperatorAssignment {
+  orderId: string;
+  operator: string;
+  assignedAt: string;
 }

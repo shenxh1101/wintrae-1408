@@ -11,9 +11,17 @@ import {
   X,
   Save,
   FileText,
+  ShoppingBag,
+  RotateCcw,
+  UserCheck,
+  CreditCard,
+  Package,
+  Clock,
+  AlertCircle,
+  ChevronRight,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
-import type { Neighbor } from '../../types';
+import type { Neighbor, NeighborDetailView, PayStatus, PickupStatus, AfterSaleType, AfterSaleStatus } from '../../types';
 
 const AVATAR_OPTIONS = [
   '👤', '👩', '👨', '👵', '👴', '👧', '👦',
@@ -39,19 +47,55 @@ function initEditState(neighbor: Neighbor): EditState {
   };
 }
 
+const PAY_STATUS_MAP: Record<PayStatus, { label: string; className: string }> = {
+  unpaid: { label: '待支付', className: 'bg-warning-100 text-warning-600' },
+  paid: { label: '已支付', className: 'bg-success-100 text-success-600' },
+  refunded: { label: '已退款', className: 'bg-warm-100 text-warm-500' },
+};
+
+const PICKUP_STATUS_MAP: Record<PickupStatus, { label: string; className: string }> = {
+  pending: { label: '待取货', className: 'bg-warning-100 text-warning-600' },
+  picked: { label: '已取货', className: 'bg-success-100 text-success-600' },
+  partial: { label: '部分取货', className: 'bg-secondary-100 text-secondary-600' },
+};
+
+const AFTER_SALE_TYPE_MAP: Record<AfterSaleType, { label: string; className: string }> = {
+  out_of_stock: { label: '缺货', className: 'bg-warning-100 text-warning-600' },
+  damaged: { label: '破损', className: 'bg-danger-100 text-danger-600' },
+  refund: { label: '退款', className: 'bg-secondary-100 text-secondary-600' },
+  reissue: { label: '补发', className: 'bg-primary-100 text-primary-600' },
+};
+
+const AFTER_SALE_STATUS_MAP: Record<AfterSaleStatus, { label: string; className: string }> = {
+  pending: { label: '待处理', className: 'bg-warning-100 text-warning-600' },
+  processed: { label: '已处理', className: 'bg-success-100 text-success-600' },
+  closed: { label: '已关闭', className: 'bg-warm-100 text-warm-500' },
+};
+
+type RecentTab = 'orders' | 'aftersales' | 'pickups';
+
 export default function NeighborsPage() {
-  const { neighbors, addNeighbor, updateNeighbor, toggleBlacklist } = useAppStore();
+  const {
+    neighbors,
+    addNeighbor,
+    updateNeighbor,
+    toggleBlacklist,
+    getNeighborDetailView,
+    getNeighborDisplayInfo,
+  } = useAppStore();
 
   const [searchValue, setSearchValue] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'normal' | 'blacklist'>('all');
   const [showDrawer, setShowDrawer] = useState(false);
-  const [selectedNeighbor, setSelectedNeighbor] = useState<Neighbor | null>(null);
+  const [selectedNeighborId, setSelectedNeighborId] = useState<string | null>(null);
+  const [detailView, setDetailView] = useState<NeighborDetailView | null>(null);
   const [editState, setEditState] = useState<EditState | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showAvatarPicker, setShowAvatarPicker] = useState<'add' | 'drawer' | null>(null);
   const [showBlacklistModal, setShowBlacklistModal] = useState(false);
   const [blacklistReason, setBlacklistReason] = useState('');
   const [blacklistError, setBlacklistError] = useState('');
+  const [activeTab, setActiveTab] = useState<RecentTab>('orders');
   const [formData, setFormData] = useState({
     name: '',
     phone: '',
@@ -61,6 +105,16 @@ export default function NeighborsPage() {
     frequentCategories: [] as string[],
     remark: '',
   });
+
+  const displayInfo = useMemo(() => {
+    if (!selectedNeighborId) return null;
+    return getNeighborDisplayInfo(selectedNeighborId);
+  }, [selectedNeighborId, getNeighborDisplayInfo]);
+
+  const selectedNeighbor = useMemo(() => {
+    if (!selectedNeighborId) return null;
+    return neighbors.find((n) => n.id === selectedNeighborId) || null;
+  }, [selectedNeighborId, neighbors]);
 
   const filteredNeighbors = useMemo(() => {
     let result = neighbors;
@@ -90,15 +144,24 @@ export default function NeighborsPage() {
   }), [neighbors]);
 
   const openDrawer = (neighbor: Neighbor) => {
-    setSelectedNeighbor(neighbor);
+    setSelectedNeighborId(neighbor.id);
+    setDetailView(getNeighborDetailView(neighbor.id));
     setEditState(initEditState(neighbor));
+    setActiveTab('orders');
     setShowDrawer(true);
   };
 
   const closeDrawer = () => {
     setShowDrawer(false);
-    setSelectedNeighbor(null);
+    setSelectedNeighborId(null);
+    setDetailView(null);
     setEditState(null);
+    setActiveTab('orders');
+  };
+
+  const refreshDetailView = () => {
+    if (!selectedNeighborId) return;
+    setDetailView(getNeighborDetailView(selectedNeighborId));
   };
 
   const hasChanges = useMemo(() => {
@@ -115,30 +178,31 @@ export default function NeighborsPage() {
   }, [selectedNeighbor, editState]);
 
   const handleSaveChanges = () => {
-    if (!selectedNeighbor || !editState) return;
-    updateNeighbor(selectedNeighbor.id, editState);
-    setSelectedNeighbor({ ...selectedNeighbor, ...editState });
+    if (!selectedNeighborId || !editState) return;
+    updateNeighbor(selectedNeighborId, editState);
+    refreshDetailView();
   };
 
   const openBlacklistModal = () => {
-    if (!selectedNeighbor) return;
-    setBlacklistReason(selectedNeighbor.isBlacklisted ? '' : '');
+    if (!displayInfo) return;
+    setBlacklistReason(displayInfo.isBlacklisted ? '' : '');
     setBlacklistError('');
     setShowBlacklistModal(true);
   };
 
   const handleToggleBlacklist = () => {
-    if (!selectedNeighbor) return;
+    if (!selectedNeighborId) return;
 
-    if (!selectedNeighbor.isBlacklisted && !blacklistReason.trim()) {
+    if (!displayInfo?.isBlacklisted && !blacklistReason.trim()) {
       setBlacklistError('请填写黑名单原因');
       return;
     }
 
-    toggleBlacklist(selectedNeighbor.id, blacklistReason.trim() || undefined);
+    toggleBlacklist(selectedNeighborId, blacklistReason.trim() || undefined);
     setShowBlacklistModal(false);
     setBlacklistReason('');
     setBlacklistError('');
+    refreshDetailView();
   };
 
   const handleAddSubmit = (e: React.FormEvent) => {
@@ -187,6 +251,8 @@ export default function NeighborsPage() {
     }
     setShowAvatarPicker(null);
   };
+
+  const formatCurrency = (amount: number) => `¥${amount.toFixed(2)}`;
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -271,7 +337,7 @@ export default function NeighborsPage() {
       )}
 
       {/* 详情抽屉 */}
-      {showDrawer && selectedNeighbor && editState && (
+      {showDrawer && detailView && editState && displayInfo && (
         <>
           <div
             className="fixed inset-0 bg-black/30 z-40 animate-fade-in"
@@ -300,163 +366,440 @@ export default function NeighborsPage() {
             </div>
 
             <div className="p-5 space-y-5">
-              {/* 头像和姓名 */}
-              <div className="flex items-center gap-4">
-                <div className="relative">
-                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary-100 to-primary-200 flex items-center justify-center text-3xl cursor-pointer hover:shadow-md transition-shadow"
-                    onClick={() => setShowAvatarPicker('drawer')}
-                  >
-                    {editState.avatar}
-                  </div>
-                  <div className="absolute -bottom-1 -right-1 w-6 h-6 bg-white rounded-full shadow flex items-center justify-center text-warm-500">
-                    <Edit2 size={12} />
-                  </div>
+              {/* 区域1：基本信息 */}
+              <div className="bg-gradient-to-br from-primary-50/50 to-white rounded-2xl border border-primary-100/50 p-4 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-warm-700 flex items-center gap-2">
+                    <UserCheck size={16} className="text-primary-500" />
+                    基本信息
+                  </h3>
+                  {displayInfo.isBlacklisted && (
+                    <span className="px-2 py-0.5 bg-danger-100 text-danger-600 text-xs font-bold rounded-full flex items-center gap-1">
+                      <Ban size={10} />
+                      黑名单
+                    </span>
+                  )}
                 </div>
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <input
-                      type="text"
-                      value={editState.name}
-                      onChange={(e) => setEditState({ ...editState, name: e.target.value })}
-                      className="flex-1 text-lg font-bold text-warm-800 bg-warm-50 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-primary-100"
-                      placeholder="姓名"
-                    />
-                    {selectedNeighbor.isBlacklisted && (
-                      <span className="px-2 py-0.5 bg-danger-100 text-danger-600 text-xs font-medium rounded-full flex-shrink-0">
-                        黑名单
-                      </span>
+
+                {/* 头像和姓名 */}
+                <div className="flex items-center gap-4">
+                  <div className="relative">
+                    <div
+                      className={`w-16 h-16 rounded-2xl flex items-center justify-center text-3xl cursor-pointer hover:shadow-md transition-shadow ${
+                        displayInfo.isBlacklisted
+                          ? 'bg-danger-100'
+                          : 'bg-gradient-to-br from-primary-100 to-primary-200'
+                      }`}
+                      onClick={() => setShowAvatarPicker('drawer')}
+                    >
+                      {editState.avatar}
+                    </div>
+                    <div className="absolute -bottom-1 -right-1 w-6 h-6 bg-white rounded-full shadow flex items-center justify-center text-warm-500">
+                      <Edit2 size={12} />
+                    </div>
+                  </div>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <input
+                        type="text"
+                        value={editState.name}
+                        onChange={(e) => setEditState({ ...editState, name: e.target.value })}
+                        className="flex-1 text-lg font-bold text-warm-800 bg-white rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-primary-100 border border-warm-100"
+                        placeholder="姓名"
+                      />
+                    </div>
+                    {displayInfo.isBlacklisted && displayInfo.blacklistReason && (
+                      <p className="text-xs text-danger-500 flex items-center gap-1">
+                        <AlertCircle size={12} />
+                        原因：{displayInfo.blacklistReason}
+                      </p>
                     )}
                   </div>
-                  {selectedNeighbor.isBlacklisted && selectedNeighbor.blacklistReason && (
-                    <p className="text-xs text-danger-500">原因：{selectedNeighbor.blacklistReason}</p>
-                  )}
+                </div>
+
+                {/* 头像选择器 */}
+                {showAvatarPicker === 'drawer' && (
+                  <div className="bg-white rounded-xl p-3 animate-fade-in border border-warm-100">
+                    <p className="text-xs text-warm-500 mb-2">选择头像</p>
+                    <div className="grid grid-cols-6 gap-2">
+                      {AVATAR_OPTIONS.map((av) => (
+                        <button
+                          key={av}
+                          type="button"
+                          onClick={() => selectAvatar(av)}
+                          className={`w-10 h-10 rounded-lg flex items-center justify-center text-xl transition-all ${
+                            editState.avatar === av
+                              ? 'bg-primary-100 ring-2 ring-primary-400'
+                              : 'bg-warm-50 hover:bg-primary-50'
+                          }`}
+                        >
+                          {av}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* 联系信息 - 可编辑 */}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3 p-3 bg-white rounded-xl border border-warm-100">
+                    <Phone size={18} className="text-primary-500 flex-shrink-0" />
+                    <div className="flex-1">
+                      <p className="text-xs text-warm-500 mb-0.5">手机号</p>
+                      <input
+                        type="tel"
+                        value={editState.phone}
+                        onChange={(e) => setEditState({ ...editState, phone: e.target.value })}
+                        className="w-full text-sm font-medium text-warm-800 bg-transparent focus:outline-none"
+                        placeholder="手机号"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="flex items-center gap-2 p-3 bg-white rounded-xl border border-warm-100">
+                      <Building2 size={16} className="text-secondary-500 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs text-warm-500 mb-0.5">楼栋</p>
+                        <select
+                          value={editState.building}
+                          onChange={(e) => setEditState({ ...editState, building: e.target.value })}
+                          className="w-full text-sm font-medium text-warm-800 bg-transparent focus:outline-none"
+                        >
+                          {BUILDINGS.map((b) => (
+                            <option key={b} value={b}>{b}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 p-3 bg-white rounded-xl border border-warm-100">
+                      <Building2 size={16} className="text-secondary-500 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs text-warm-500 mb-0.5">房号</p>
+                        <input
+                          type="text"
+                          value={editState.room}
+                          onChange={(e) => setEditState({ ...editState, room: e.target.value })}
+                          className="w-full text-sm font-medium text-warm-800 bg-transparent focus:outline-none"
+                          placeholder="如: 1502"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 常购品类 - 可多选编辑 */}
+                <div>
+                  <h4 className="text-xs font-medium text-warm-600 mb-2 flex items-center gap-2">
+                    <Tag size={14} className="text-primary-500" />
+                    常购品类
+                    <span className="text-warm-400 font-normal">（点击选择/取消）</span>
+                  </h4>
+                  <div className="flex flex-wrap gap-2">
+                    {ALL_CATEGORIES.map((cat) => {
+                      const isSelected = editState.frequentCategories.includes(cat);
+                      return (
+                        <button
+                          key={cat}
+                          type="button"
+                          onClick={() => toggleCategoryInDrawer(cat)}
+                          className={`px-3 py-1.5 text-xs rounded-full transition-all ${
+                            isSelected
+                              ? 'bg-primary-500 text-white shadow-sm'
+                              : 'bg-warm-100 text-warm-600 hover:bg-warm-200'
+                          }`}
+                        >
+                          {isSelected && '✓ '}
+                          {cat}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 备注 - 可编辑 textarea */}
+                <div>
+                  <h4 className="text-xs font-medium text-warm-600 mb-2 flex items-center gap-2">
+                    <FileText size={14} className="text-primary-500" />
+                    备注
+                  </h4>
+                  <textarea
+                    value={editState.remark}
+                    onChange={(e) => setEditState({ ...editState, remark: e.target.value })}
+                    className="w-full h-20 px-3 py-2 border border-warm-200 rounded-xl focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-50 resize-none text-sm text-warm-700 bg-white"
+                    placeholder="添加备注..."
+                  />
+                </div>
+
+                {hasChanges && (
+                  <button
+                    onClick={handleSaveChanges}
+                    className="w-full h-10 rounded-xl bg-gradient-to-r from-primary-500 to-primary-600 text-white font-medium flex items-center justify-center gap-2 hover:from-primary-600 hover:to-primary-700 transition-all btn-press text-sm"
+                  >
+                    <Save size={16} />
+                    保存基本信息
+                  </button>
+                )}
+              </div>
+
+              {/* 区域2：订单统计卡 */}
+              <div className="bg-gradient-to-br from-secondary-50/80 to-white rounded-2xl border border-secondary-100/50 p-4">
+                <h3 className="text-sm font-bold text-warm-700 mb-4 flex items-center gap-2">
+                  <ShoppingBag size={16} className="text-secondary-500" />
+                  订单统计
+                </h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-white rounded-xl p-3 shadow-sm border border-warm-50">
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="w-7 h-7 rounded-lg bg-primary-100 flex items-center justify-center">
+                        <ShoppingBag size={14} className="text-primary-500" />
+                      </div>
+                      <p className="text-xs text-warm-500">总单数</p>
+                    </div>
+                    <p className="text-xl font-bold text-warm-800 tabular-nums ml-9">
+                      {detailView.orderStats.totalOrders}
+                    </p>
+                  </div>
+                  <div className="bg-white rounded-xl p-3 shadow-sm border border-warm-50">
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="w-7 h-7 rounded-lg bg-success-100 flex items-center justify-center">
+                        <CreditCard size={14} className="text-success-500" />
+                      </div>
+                      <p className="text-xs text-warm-500">累计消费</p>
+                    </div>
+                    <p className="text-xl font-bold text-success-600 tabular-nums ml-9">
+                      {formatCurrency(detailView.orderStats.totalSpent)}
+                    </p>
+                  </div>
+                  <div className="bg-white rounded-xl p-3 shadow-sm border border-warm-50">
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="w-7 h-7 rounded-lg bg-secondary-100 flex items-center justify-center">
+                        <Package size={14} className="text-secondary-500" />
+                      </div>
+                      <p className="text-xs text-warm-500">客单价</p>
+                    </div>
+                    <p className="text-xl font-bold text-secondary-600 tabular-nums ml-9">
+                      {formatCurrency(detailView.orderStats.avgOrderAmount)}
+                    </p>
+                  </div>
+                  <div className="bg-white rounded-xl p-3 shadow-sm border border-warm-50">
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="w-7 h-7 rounded-lg bg-warning-100 flex items-center justify-center">
+                        <Clock size={14} className="text-warning-500" />
+                      </div>
+                      <p className="text-xs text-warm-500">最近下单</p>
+                    </div>
+                    <p className="text-sm font-bold text-warm-700 tabular-nums ml-9 mt-1">
+                      {detailView.orderStats.lastOrderDate}
+                    </p>
+                  </div>
                 </div>
               </div>
 
-              {/* 头像选择器 */}
-              {showAvatarPicker === 'drawer' && (
-                <div className="bg-warm-50 rounded-xl p-3 animate-fade-in">
-                  <p className="text-xs text-warm-500 mb-2">选择头像</p>
-                  <div className="grid grid-cols-6 gap-2">
-                    {AVATAR_OPTIONS.map((av) => (
+              {/* 区域3：最近记录 Tabs */}
+              <div className="bg-white rounded-2xl border border-warm-100 overflow-hidden shadow-sm">
+                <div className="border-b border-warm-100 px-1">
+                  <div className="flex">
+                    {[
+                      { key: 'orders' as RecentTab, label: '最近订单', icon: ShoppingBag, count: detailView.recentOrders.length },
+                      { key: 'aftersales' as RecentTab, label: '最近售后', icon: RotateCcw, count: detailView.recentAfterSales.length },
+                      { key: 'pickups' as RecentTab, label: '最近取货', icon: UserCheck, count: detailView.recentPickups.length },
+                    ].map((tab) => (
                       <button
-                        key={av}
-                        type="button"
-                        onClick={() => selectAvatar(av)}
-                        className={`w-10 h-10 rounded-lg flex items-center justify-center text-xl transition-all ${
-                          editState.avatar === av
-                            ? 'bg-primary-100 ring-2 ring-primary-400'
-                            : 'bg-white hover:bg-primary-50'
+                        key={tab.key}
+                        onClick={() => setActiveTab(tab.key)}
+                        className={`flex-1 py-3 px-2 text-sm font-medium transition-all relative flex items-center justify-center gap-1.5 ${
+                          activeTab === tab.key
+                            ? 'text-primary-600'
+                            : 'text-warm-500 hover:text-warm-700 hover:bg-warm-50'
                         }`}
                       >
-                        {av}
+                        <tab.icon size={14} />
+                        <span className="hidden sm:inline">{tab.label}</span>
+                        <span className={`text-xs px-1.5 py-0.5 rounded-full min-w-[20px] text-center ${
+                          activeTab === tab.key
+                            ? 'bg-primary-100 text-primary-600'
+                            : 'bg-warm-100 text-warm-500'
+                        }`}>
+                          {tab.count}
+                        </span>
+                        {activeTab === tab.key && (
+                          <div className="absolute bottom-0 left-2 right-2 h-0.5 bg-primary-500 rounded-t-full" />
+                        )}
                       </button>
                     ))}
                   </div>
                 </div>
-              )}
 
-              {/* 联系信息 - 可编辑 */}
-              <div className="space-y-3">
-                <div className="flex items-center gap-3 p-3 bg-warm-50 rounded-xl">
-                  <Phone size={18} className="text-primary-500 flex-shrink-0" />
-                  <div className="flex-1">
-                    <p className="text-xs text-warm-500 mb-0.5">手机号</p>
-                    <input
-                      type="tel"
-                      value={editState.phone}
-                      onChange={(e) => setEditState({ ...editState, phone: e.target.value })}
-                      className="w-full text-sm font-medium text-warm-800 bg-transparent focus:outline-none"
-                      placeholder="手机号"
-                    />
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="flex items-center gap-2 p-3 bg-warm-50 rounded-xl">
-                    <Building2 size={16} className="text-secondary-500 flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs text-warm-500 mb-0.5">楼栋</p>
-                      <select
-                        value={editState.building}
-                        onChange={(e) => setEditState({ ...editState, building: e.target.value })}
-                        className="w-full text-sm font-medium text-warm-800 bg-transparent focus:outline-none"
-                      >
-                        {BUILDINGS.map((b) => (
-                          <option key={b} value={b}>{b}</option>
-                        ))}
-                      </select>
+                <div className="p-4 max-h-[400px] overflow-y-auto">
+                  {/* 最近订单 */}
+                  {activeTab === 'orders' && (
+                    <div className="space-y-3">
+                      {detailView.recentOrders.length === 0 ? (
+                        <EmptyState icon={ShoppingBag} text="暂无订单记录" />
+                      ) : (
+                        detailView.recentOrders.map((item) => (
+                          <div
+                            key={item.order.id}
+                            className="bg-warm-50 rounded-xl p-3 border border-warm-100"
+                          >
+                            <div className="flex items-center justify-between mb-2">
+                              <div>
+                                <p className="text-xs text-warm-400">{item.order.date}</p>
+                                <p className="text-sm font-semibold text-warm-700 font-mono">{item.order.orderNo}</p>
+                              </div>
+                              <div className="flex flex-col items-end gap-1">
+                                <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${PAY_STATUS_MAP[item.order.payStatus].className}`}>
+                                  {PAY_STATUS_MAP[item.order.payStatus].label}
+                                </span>
+                                <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${PICKUP_STATUS_MAP[item.order.pickupStatus].className}`}>
+                                  {PICKUP_STATUS_MAP[item.order.pickupStatus].label}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="space-y-1 mb-2">
+                              {item.items.map((it, idx) => (
+                                <div key={idx} className="flex items-center justify-between text-xs">
+                                  <span className="text-warm-600 flex items-center gap-1">
+                                    <ChevronRight size={10} className="text-warm-300" />
+                                    {it.productName} × {it.quantity}
+                                  </span>
+                                  <span className="text-warm-500 tabular-nums">{formatCurrency(it.subtotal)}</span>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="pt-2 border-t border-warm-100 flex items-center justify-between">
+                              <span className="text-xs text-warm-500">合计</span>
+                              <span className="text-sm font-bold text-primary-600 tabular-nums">
+                                {formatCurrency(item.order.totalAmount)}
+                              </span>
+                            </div>
+                          </div>
+                        ))
+                      )}
                     </div>
-                  </div>
-                  <div className="flex items-center gap-2 p-3 bg-warm-50 rounded-xl">
-                    <Building2 size={16} className="text-secondary-500 flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs text-warm-500 mb-0.5">房号</p>
-                      <input
-                        type="text"
-                        value={editState.room}
-                        onChange={(e) => setEditState({ ...editState, room: e.target.value })}
-                        className="w-full text-sm font-medium text-warm-800 bg-transparent focus:outline-none"
-                        placeholder="如: 1502"
-                      />
+                  )}
+
+                  {/* 最近售后 */}
+                  {activeTab === 'aftersales' && (
+                    <div className="space-y-3">
+                      {detailView.recentAfterSales.length === 0 ? (
+                        <EmptyState icon={RotateCcw} text="暂无售后记录" />
+                      ) : (
+                        detailView.recentAfterSales.map((item) => (
+                          <div
+                            key={item.afterSale.id}
+                            className="bg-warm-50 rounded-xl p-3 border border-warm-100"
+                          >
+                            <div className="flex items-center justify-between mb-2">
+                              <div>
+                                <p className="text-xs text-warm-400">
+                                  {new Date(item.afterSale.createdAt).toLocaleDateString('zh-CN')}
+                                </p>
+                                <p className="text-sm font-semibold text-warm-700 font-mono">{item.orderNo}</p>
+                              </div>
+                              <div className="flex flex-col items-end gap-1">
+                                <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${AFTER_SALE_TYPE_MAP[item.afterSale.type].className}`}>
+                                  {AFTER_SALE_TYPE_MAP[item.afterSale.type].label}
+                                </span>
+                                <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${AFTER_SALE_STATUS_MAP[item.afterSale.status].className}`}>
+                                  {AFTER_SALE_STATUS_MAP[item.afterSale.status].label}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="space-y-1 mb-2">
+                              {item.items.map((it, idx) => (
+                                <div key={idx} className="flex items-center justify-between text-xs">
+                                  <span className="text-warm-600 flex items-center gap-1">
+                                    <ChevronRight size={10} className="text-warm-300" />
+                                    {it.productName} × {it.quantity}
+                                  </span>
+                                  <span className="text-danger-500 tabular-nums">-{formatCurrency(it.amount)}</span>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="bg-danger-50/50 rounded-lg p-2 mb-2">
+                              <p className="text-xs text-warm-500 mb-0.5">售后原因</p>
+                              <p className="text-xs text-warm-700">{item.afterSale.reason}</p>
+                            </div>
+                            <div className="pt-2 border-t border-warm-100 flex items-center justify-between">
+                              <span className="text-xs text-warm-500">售后金额</span>
+                              <span className="text-sm font-bold text-danger-600 tabular-nums">
+                                -{formatCurrency(item.afterSale.amount)}
+                              </span>
+                            </div>
+                          </div>
+                        ))
+                      )}
                     </div>
-                  </div>
+                  )}
+
+                  {/* 最近取货 */}
+                  {activeTab === 'pickups' && (
+                    <div className="space-y-3">
+                      {detailView.recentPickups.length === 0 ? (
+                        <EmptyState icon={UserCheck} text="暂无取货记录" />
+                      ) : (
+                        detailView.recentPickups.map((item) => (
+                          <div
+                            key={item.orderId}
+                            className="bg-warm-50 rounded-xl p-3 border border-warm-100"
+                          >
+                            <div className="flex items-center justify-between mb-2">
+                              <div>
+                                <p className="text-sm font-semibold text-warm-700 font-mono">{item.orderNo}</p>
+                              </div>
+                              <span className="px-2 py-0.5 text-xs rounded-full font-medium bg-success-100 text-success-600 flex items-center gap-1">
+                                <CheckCircle size={10} />
+                                已取货
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 mb-2">
+                              <div className="bg-white rounded-lg p-2">
+                                <p className="text-xs text-warm-400 mb-0.5 flex items-center gap-1">
+                                  <Clock size={10} />
+                                  取货时间
+                                </p>
+                                <p className="text-xs font-medium text-warm-700">{item.pickupTime}</p>
+                              </div>
+                              <div className="bg-white rounded-lg p-2">
+                                <p className="text-xs text-warm-400 mb-0.5 flex items-center gap-1">
+                                  <UserCheck size={10} />
+                                  处理人
+                                </p>
+                                <p className="text-xs font-medium text-warm-700">{item.operator}</p>
+                              </div>
+                            </div>
+                            <div className="pt-2 border-t border-warm-100 space-y-1">
+                              <p className="text-xs text-warm-500 mb-1">商品明细</p>
+                              {item.items.map((it, idx) => (
+                                <div key={idx} className="flex items-center justify-between text-xs">
+                                  <span className="text-warm-600 flex items-center gap-1">
+                                    <ChevronRight size={10} className="text-warm-300" />
+                                    {it.productName}
+                                  </span>
+                                  <span className="text-warm-500">× {it.quantity}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
-              {/* 常购品类 - 可多选编辑 */}
-              <div>
-                <h4 className="text-sm font-medium text-warm-700 mb-3 flex items-center gap-2">
-                  <Tag size={16} className="text-primary-500" />
-                  常购品类
-                  <span className="text-xs text-warm-400 font-normal">（点击选择/取消）</span>
-                </h4>
-                <div className="flex flex-wrap gap-2">
-                  {ALL_CATEGORIES.map((cat) => {
-                    const isSelected = editState.frequentCategories.includes(cat);
-                    return (
-                      <button
-                        key={cat}
-                        type="button"
-                        onClick={() => toggleCategoryInDrawer(cat)}
-                        className={`px-3 py-1.5 text-sm rounded-full transition-all ${
-                          isSelected
-                            ? 'bg-primary-500 text-white shadow-sm'
-                            : 'bg-warm-100 text-warm-600 hover:bg-warm-200'
-                        }`}
-                      >
-                        {isSelected && '✓ '}
-                        {cat}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* 备注 - 可编辑 textarea */}
-              <div>
-                <h4 className="text-sm font-medium text-warm-700 mb-3 flex items-center gap-2">
-                  <FileText size={16} className="text-primary-500" />
-                  备注
-                </h4>
-                <textarea
-                  value={editState.remark}
-                  onChange={(e) => setEditState({ ...editState, remark: e.target.value })}
-                  className="w-full h-24 px-3 py-2 border border-warm-200 rounded-xl focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-50 resize-none text-sm text-warm-700"
-                  placeholder="添加备注..."
-                />
-              </div>
-
-              {/* 操作按钮 */}
-              <div className="space-y-3 pt-2">
+              {/* 黑名单操作按钮 */}
+              <div className="space-y-3 pt-2 pb-4">
                 <button
                   onClick={openBlacklistModal}
                   className={`w-full h-12 rounded-xl font-medium flex items-center justify-center gap-2 transition-all btn-press ${
-                    selectedNeighbor.isBlacklisted
-                      ? 'bg-success-50 text-success-600 hover:bg-success-100'
-                      : 'bg-danger-50 text-danger-600 hover:bg-danger-100'
+                    displayInfo.isBlacklisted
+                      ? 'bg-success-50 text-success-600 hover:bg-success-100 border border-success-200'
+                      : 'bg-danger-50 text-danger-600 hover:bg-danger-100 border border-danger-200'
                   }`}
                 >
-                  {selectedNeighbor.isBlacklisted ? (
+                  {displayInfo.isBlacklisted ? (
                     <>
                       <CheckCircle size={18} />
                       移出黑名单
@@ -468,15 +811,6 @@ export default function NeighborsPage() {
                     </>
                   )}
                 </button>
-                {hasChanges && (
-                  <button
-                    onClick={handleSaveChanges}
-                    className="w-full h-12 rounded-xl bg-gradient-to-r from-primary-500 to-primary-600 text-white font-medium flex items-center justify-center gap-2 hover:from-primary-600 hover:to-primary-700 transition-all btn-press"
-                  >
-                    <Save size={18} />
-                    保存修改
-                  </button>
-                )}
               </div>
             </div>
           </div>
@@ -484,12 +818,12 @@ export default function NeighborsPage() {
       )}
 
       {/* 黑名单原因弹窗 */}
-      {showBlacklistModal && selectedNeighbor && (
+      {showBlacklistModal && displayInfo && (
         <div className="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center p-4 animate-fade-in">
           <div className="bg-white rounded-2xl shadow-card-lg w-full max-w-sm animate-slide-up">
             <div className="flex items-center justify-between p-5 border-b border-warm-100">
               <h2 className="text-lg font-bold text-warm-800">
-                {selectedNeighbor.isBlacklisted ? '移出黑名单' : '加入黑名单'}
+                {displayInfo.isBlacklisted ? '移出黑名单' : '加入黑名单'}
               </h2>
               <button
                 onClick={() => {
@@ -505,12 +839,12 @@ export default function NeighborsPage() {
 
             <div className="p-5">
               <p className="text-sm text-warm-600 mb-4">
-                {selectedNeighbor.isBlacklisted
-                  ? `确定要将「${selectedNeighbor.name}」移出黑名单吗？`
-                  : `请填写将「${selectedNeighbor.name}」加入黑名单的原因：`}
+                {displayInfo.isBlacklisted
+                  ? `确定要将「${displayInfo.name}」移出黑名单吗？`
+                  : `请填写将「${displayInfo.name}」加入黑名单的原因：`}
               </p>
 
-              {!selectedNeighbor.isBlacklisted && (
+              {!displayInfo.isBlacklisted && (
                 <>
                   <textarea
                     value={blacklistReason}
@@ -548,7 +882,7 @@ export default function NeighborsPage() {
                   type="button"
                   onClick={handleToggleBlacklist}
                   className={`flex-1 h-11 rounded-xl font-medium transition-all btn-press ${
-                    selectedNeighbor.isBlacklisted
+                    displayInfo.isBlacklisted
                       ? 'bg-success-500 text-white hover:bg-success-600'
                       : 'bg-danger-500 text-white hover:bg-danger-600'
                   }`}
@@ -730,6 +1064,17 @@ export default function NeighborsPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function EmptyState({ icon: Icon, text }: { icon: typeof ShoppingBag; text: string }) {
+  return (
+    <div className="py-10 text-center">
+      <div className="w-12 h-12 mx-auto mb-3 rounded-xl bg-warm-50 flex items-center justify-center text-warm-300">
+        <Icon size={24} />
+      </div>
+      <p className="text-sm text-warm-400">{text}</p>
     </div>
   );
 }

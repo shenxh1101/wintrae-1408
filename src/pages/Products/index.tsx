@@ -21,29 +21,40 @@ import {
   Users,
   BarChart3,
   RefreshCw,
+  History,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
-import type { Product } from '../../types';
+import type { Product, StockMovement, StockMovementType } from '../../types';
+
+const movementTypeConfig: Record<StockMovementType, { label: string; bgColor: string; textColor: string; borderColor: string }> = {
+  restock: { label: '补货', bgColor: 'bg-green-50', textColor: 'text-green-700', borderColor: 'border-green-200' },
+  sold: { label: '销售', bgColor: 'bg-gray-100', textColor: 'text-gray-700', borderColor: 'border-gray-200' },
+  offline: { label: '下架', bgColor: 'bg-orange-50', textColor: 'text-orange-700', borderColor: 'border-orange-200' },
+  online: { label: '上架', bgColor: 'bg-teal-50', textColor: 'text-teal-700', borderColor: 'border-teal-200' },
+  adjust: { label: '调整', bgColor: 'bg-purple-50', textColor: 'text-purple-700', borderColor: 'border-purple-200' },
+};
 
 export default function ProductsPage() {
   const {
+    products,
+    suppliers,
     currentDate,
-    setCurrentDate,
-    getProductsByDate,
+    operatorName,
     getDailySummary,
     getActiveProductsByDate,
-    getOrdersByDate,
-    addProduct,
-    updateProduct,
-    deleteProduct,
+    getProductsByDate,
     toggleProductActive,
     restockProduct,
-    suppliers,
+    getStockMovements,
+    setCurrentDate,
+    getAllPickupPoints,
   } = useAppStore();
 
   const [showModal, setShowModal] = useState(false);
   const [showRestockModal, setShowRestockModal] = useState(false);
+  const [showStockMovementsModal, setShowStockMovementsModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [stockMovementsProduct, setStockMovementsProduct] = useState<Product | null>(null);
   const [restockingProduct, setRestockingProduct] = useState<Product | null>(null);
   const [restockQuantity, setRestockQuantity] = useState(1);
   const [selectedPickupPoint, setSelectedPickupPoint] = useState<string>('all');
@@ -65,12 +76,20 @@ export default function ProductsPage() {
   const allProducts = getProductsByDate(currentDate);
   const activeProducts = getActiveProductsByDate(currentDate);
   const summary = getDailySummary(currentDate);
-  const dayOrders = getOrdersByDate(currentDate);
 
-  const pickupPoints = useMemo(() => {
-    const points = new Set(allProducts.map((p) => p.pickupPoint));
-    return Array.from(points);
-  }, [allProducts]);
+  const allPickupPoints = getAllPickupPoints();
+  const getSupplierById = (id: string) => suppliers.find((s) => s.id === id);
+
+  const supplierOptions = useMemo(() => {
+    const supplierSet = new Map<string, string>();
+    products.forEach((p) => {
+      const supplier = getSupplierById(p.supplierId);
+      if (supplier) {
+        supplierSet.set(supplier.id, supplier.name);
+      }
+    });
+    return Array.from(supplierSet.entries()).map(([id, name]) => ({ id, name }));
+  }, [products, suppliers]);
 
   const filteredProducts = useMemo(() => {
     return allProducts.filter((product) => {
@@ -85,17 +104,8 @@ export default function ProductsPage() {
   }, [activeProducts]);
 
   const activeReceivable = useMemo(() => {
-    const activeProductIds = new Set(activeProducts.map((p) => p.id));
-    return dayOrders.reduce((sum, order) => {
-      const orderActiveAmount = order.items.reduce((orderSum, item) => {
-        if (activeProductIds.has(item.productId)) {
-          return orderSum + item.price * item.quantity;
-        }
-        return orderSum;
-      }, 0);
-      return sum + orderActiveAmount;
-    }, 0);
-  }, [dayOrders, activeProducts]);
+    return activeProducts.reduce((sum, p) => sum + p.sold * p.price, 0);
+  }, [activeProducts]);
 
   const goPrevDay = () => setCurrentDate(format(subDays(new Date(currentDate), 1), 'yyyy-MM-dd'));
   const goNextDay = () => setCurrentDate(format(addDays(new Date(currentDate), 1), 'yyyy-MM-dd'));
@@ -143,37 +153,37 @@ export default function ProductsPage() {
     setShowRestockModal(true);
   };
 
+  const openStockMovementsModal = (product: Product) => {
+    setStockMovementsProduct(product);
+    setShowStockMovementsModal(true);
+  };
+
   const handleRestock = () => {
     if (!restockingProduct || restockQuantity <= 0) return;
-    const result = restockProduct(restockingProduct.id, restockQuantity);
+    const result = restockProduct(restockingProduct.id, restockQuantity, operatorName);
     if (result.success) {
       setShowRestockModal(false);
       setRestockingProduct(null);
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (editingProduct) {
-      updateProduct(editingProduct.id, { ...formData, date: currentDate });
-    } else {
-      addProduct({ ...formData, date: currentDate });
-    }
-    setShowModal(false);
+  const handleToggleActive = (productId: string) => {
+    toggleProductActive(productId);
   };
 
-  const handleDelete = (id: string) => {
-    if (confirm('确定要删除这个商品吗？')) {
-      deleteProduct(id);
-    }
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setShowModal(false);
   };
 
   const dateDisplay = format(new Date(currentDate), 'M月d日 EEEE', { locale: zhCN });
   const isTodayDate = isToday(new Date(currentDate));
 
   const getSupplierName = (id: string) => {
-    return suppliers.find((s) => s.id === id)?.name || id;
+    return getSupplierById(id)?.name || id;
   };
+
+  const stockMovements = stockMovementsProduct ? getStockMovements(stockMovementsProduct.id) : [];
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -235,7 +245,7 @@ export default function ProductsPage() {
               className="h-9 px-3 border border-warm-200 rounded-xl text-sm focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100 bg-white"
             >
               <option value="all">全部取货点</option>
-              {pickupPoints.map((point) => (
+              {allPickupPoints.map((point) => (
                 <option key={point} value={point}>
                   {point}
                 </option>
@@ -250,7 +260,7 @@ export default function ProductsPage() {
               className="h-9 px-3 border border-warm-200 rounded-xl text-sm focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100 bg-white"
             >
               <option value="all">全部供应商</option>
-              {suppliers.map((supplier) => (
+              {supplierOptions.map((supplier) => (
                 <option key={supplier.id} value={supplier.id}>
                   {supplier.name}
                 </option>
@@ -329,9 +339,10 @@ export default function ProductsPage() {
               product={product}
               index={index}
               onEdit={() => openEditModal(product)}
-              onDelete={() => handleDelete(product.id)}
-              onToggleActive={() => toggleProductActive(product.id)}
+              onDelete={() => {}}
+              onToggleActive={() => handleToggleActive(product.id)}
               onRestock={() => openRestockModal(product)}
+              onViewStockMovements={() => openStockMovementsModal(product)}
               supplierName={getSupplierName(product.supplierId)}
             />
           ))}
@@ -504,7 +515,7 @@ export default function ProductsPage() {
                   onChange={(e) => setFormData({ ...formData, supplierId: e.target.value })}
                   className="w-full h-10 px-3 border border-warm-200 rounded-xl focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100 bg-white"
                 >
-                  {suppliers.map((supplier) => (
+                  {supplierOptions.map((supplier) => (
                     <option key={supplier.id} value={supplier.id}>
                       {supplier.name}
                     </option>
@@ -565,7 +576,7 @@ export default function ProductsPage() {
                 <span className="text-3xl">{restockingProduct.image}</span>
                 <div>
                   <p className="font-medium text-warm-800">{restockingProduct.name}</p>
-                  <p className="text-sm text-warm-500">当前库存：{restockingProduct.stock} 件</p>
+                  <p className="text-sm text-warm-500">当前库存：{restockingProduct.stockAvailable} 件</p>
                 </div>
               </div>
 
@@ -582,6 +593,15 @@ export default function ProductsPage() {
                   placeholder="请输入补货数量"
                   required
                 />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-warm-700 mb-1.5">
+                  操作人
+                </label>
+                <div className="h-10 px-3 flex items-center border border-warm-200 rounded-xl bg-warm-50 text-warm-600 text-sm">
+                  {operatorName}
+                </div>
               </div>
 
               <div className="flex gap-3 pt-2">
@@ -604,6 +624,46 @@ export default function ProductsPage() {
                   确认补货
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showStockMovementsModal && stockMovementsProduct && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-card-lg w-full max-w-2xl animate-slide-up max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between p-5 border-b border-warm-100">
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">{stockMovementsProduct.image}</span>
+                <div>
+                  <h2 className="text-lg font-bold text-warm-800">库存流水</h2>
+                  <p className="text-sm text-warm-500">{stockMovementsProduct.name}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowStockMovementsModal(false);
+                  setStockMovementsProduct(null);
+                }}
+                className="w-8 h-8 rounded-full hover:bg-warm-50 flex items-center justify-center text-warm-400 hover:text-warm-600 transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5">
+              {stockMovements.length > 0 ? (
+                <div className="space-y-3">
+                  {[...stockMovements].reverse().map((movement) => (
+                  <StockMovementItem key={movement.id} movement={movement} />
+                ))}
+                </div>
+              ) : (
+                <div className="text-center py-12">
+                  <div className="text-4xl mb-3">📋</div>
+                  <p className="text-warm-500">暂无库存流水记录</p>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -643,6 +703,51 @@ function StatCard({
   );
 }
 
+function StockMovementItem({ movement }: { movement: StockMovement }) {
+  const config = movementTypeConfig[movement.type];
+  const timeStr = format(new Date(movement.timestamp), 'MM-dd HH:mm');
+  return (
+    <div className={`p-4 rounded-xl border ${config.bgColor} ${config.borderColor}`}>
+      <div className="flex items-start justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <span className={`px-2 py-0.5 rounded-lg text-xs font-medium ${config.bgColor} ${config.textColor} border ${config.borderColor}`}>
+            {config.label}
+          </span>
+          <span className="text-xs text-warm-400">{timeStr}</span>
+        </div>
+        {movement.quantity !== 0 && (
+          <span className={`text-sm font-bold tabular-nums ${
+            movement.type === 'restock' ? 'text-green-600' : movement.type === 'sold' ? 'text-gray-600' : 'text-warm-600'
+          }`}>
+            {movement.type === 'restock' ? '+' : movement.type === 'sold' ? '-' : ''}
+            {Math.abs(movement.quantity)}
+          </span>
+        )}
+      </div>
+      <div className="grid grid-cols-2 gap-3 text-xs text-warm-600">
+        <div>
+          <span className="text-warm-400">库存前：</span>
+          <span className="font-medium tabular-nums">{movement.stockBefore}</span>
+        </div>
+        <div>
+          <span className="text-warm-400">库存后：</span>
+          <span className="font-medium tabular-nums">{movement.stockAfter}</span>
+        </div>
+      </div>
+      <div className="mt-2 text-xs text-warm-600">
+        <span className="text-warm-400">操作人：</span>
+        <span className="font-medium">{movement.operator}</span>
+      </div>
+      {movement.remark && (
+        <div className="mt-1 text-xs text-warm-500">
+          <span className="text-warm-400">备注：</span>
+          <span>{movement.remark}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ProductCard({
   product,
   index,
@@ -650,6 +755,7 @@ function ProductCard({
   onDelete,
   onToggleActive,
   onRestock,
+  onViewStockMovements,
   supplierName,
 }: {
   product: Product;
@@ -658,6 +764,7 @@ function ProductCard({
   onDelete: () => void;
   onToggleActive: () => void;
   onRestock: () => void;
+  onViewStockMovements: () => void;
   supplierName: string;
 }) {
   const isSoldOut = product.isActive && product.stockAvailable <= 0;
@@ -669,10 +776,11 @@ function ProductCard({
 
   return (
     <div
-      className={`bg-white rounded-2xl shadow-card overflow-hidden card-transition animate-slide-up relative ${
+      className={`bg-white rounded-2xl shadow-card overflow-hidden card-transition animate-slide-up relative cursor-pointer ${
         !product.isActive ? 'opacity-70' : ''
       } ${isSoldOut ? 'ring-2 ring-danger-400' : ''}`}
       style={{ animationDelay: `${index * 50}ms` }}
+      onClick={onViewStockMovements}
     >
       {!product.isActive && (
         <div className="absolute inset-0 z-10 pointer-events-none">
@@ -706,10 +814,23 @@ function ProductCard({
             {product.category}
           </span>
         </div>
-        <div className="absolute top-3 right-3">
+        <div className="absolute top-3 right-3 flex gap-2">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onViewStockMovements();
+            }}
+            className="w-10 h-10 rounded-full flex items-center justify-center transition-all shadow-md bg-white/80 backdrop-blur-sm text-warm-600 hover:bg-white hover:text-warm-800 hover:scale-105"
+            title="查看库存流水"
+          >
+            <History size={18} />
+          </button>
           {isSoldOut ? (
             <button
-              onClick={onRestock}
+              onClick={(e) => {
+                e.stopPropagation();
+                onRestock();
+              }}
               className="w-10 h-10 rounded-full flex items-center justify-center transition-all shadow-md bg-primary-500 text-white hover:bg-primary-600 hover:scale-105"
               title="点击补货"
             >
@@ -717,7 +838,10 @@ function ProductCard({
             </button>
           ) : (
             <button
-              onClick={onToggleActive}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleActive();
+              }}
               className={`w-10 h-10 rounded-full flex items-center justify-center transition-all shadow-md ${
                 product.isActive
                   ? 'bg-danger-500 text-white hover:bg-danger-600 hover:scale-105'
@@ -788,16 +912,32 @@ function ProductCard({
           </div>
         )}
 
-        <div className="flex gap-2">
+        <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
           <button
-            onClick={onEdit}
+            onClick={(e) => {
+              e.stopPropagation();
+              onEdit();
+            }}
             className="flex-1 h-9 rounded-lg bg-warm-50 text-warm-600 text-sm font-medium hover:bg-warm-100 flex items-center justify-center gap-1 transition-colors btn-press"
           >
             <Edit2 size={14} />
             编辑
           </button>
           <button
-            onClick={onDelete}
+            onClick={(e) => {
+              e.stopPropagation();
+              onViewStockMovements();
+            }}
+            className="h-9 px-3 rounded-lg bg-secondary-50 text-secondary-600 text-sm font-medium hover:bg-secondary-100 flex items-center justify-center gap-1 transition-colors btn-press"
+          >
+            <History size={14} />
+            流水
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
             className="w-9 h-9 rounded-lg bg-danger-50 text-danger-500 hover:bg-danger-100 flex items-center justify-center transition-colors btn-press"
           >
             <Trash2 size={14} />

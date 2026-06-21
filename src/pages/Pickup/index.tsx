@@ -13,6 +13,7 @@ import {
   AlertCircle,
   X,
   User,
+  Users,
   Sparkles,
   Clipboard,
   Download,
@@ -43,6 +44,13 @@ export default function PickupPage() {
     getAllBuildings,
     getHandoverReport,
     getPickupHistoryByDate,
+    getAllPickupPoints,
+    assignOrderOperator,
+    batchAssignByBuilding,
+    batchAssignByPickupPoint,
+    getAssignedOperator,
+    setOperatorName,
+    operatorName,
   } = useAppStore();
 
   const [scanInput, setScanInput] = useState('');
@@ -55,6 +63,13 @@ export default function PickupPage() {
   const [selectedBuilding, setSelectedBuilding] = useState<string>('');
   const [handoverListType, setHandoverListType] = useState<HandoverListType>('pending');
 
+  const [handoverSubTab, setHandoverSubTab] = useState<'building' | 'volunteer'>('building');
+  const [assignBuilding, setAssignBuilding] = useState<string>('');
+  const [assignPickupPoint, setAssignPickupPoint] = useState<string>('');
+  const [volunteerName, setVolunteerName] = useState('');
+  const [assignMode, setAssignMode] = useState<'building' | 'pickupPoint'>('building');
+  const [refreshKey, setRefreshKey] = useState(0);
+
   const scanInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const toastIdRef = useRef(0);
@@ -63,12 +78,24 @@ export default function PickupPage() {
   const allOrders = getOrdersByDate(currentDate);
   const pickedOrders = allOrders.filter((o) => o.pickupStatus === 'picked');
   const buildings = getAllBuildings();
+  const pickupPoints = getAllPickupPoints();
   const pickupHistory = getPickupHistoryByDate(currentDate);
 
   const handoverReport = useMemo(() => {
     if (!selectedBuilding) return null;
     return getHandoverReport(currentDate, selectedBuilding);
-  }, [currentDate, selectedBuilding, getHandoverReport]);
+  }, [currentDate, selectedBuilding, getHandoverReport, refreshKey]);
+
+  const allOperators = useMemo(() => {
+    const set = new Set<string>();
+    allOrders.forEach((o) => {
+      const op = getAssignedOperator(o.id);
+      if (op) set.add(op);
+      o.pickupHistory.forEach((h) => h.operator && set.add(h.operator));
+    });
+    if (operatorName) set.add(operatorName);
+    return Array.from(set);
+  }, [allOrders, getAssignedOperator, operatorName, refreshKey]);
 
   const pendingByBuilding = useMemo(() => {
     const groups: Record<string, Order[]> = {};
@@ -83,10 +110,14 @@ export default function PickupPage() {
   }, [pendingOrders, getNeighborDisplayInfo]);
 
   useEffect(() => {
-    if (buildings.length > 0 && !selectedBuilding) {
-      setSelectedBuilding(buildings[0]);
+    if (buildings.length > 0) {
+      if (!selectedBuilding) setSelectedBuilding(buildings[0]);
+      if (!assignBuilding) setAssignBuilding(buildings[0]);
     }
-  }, [buildings, selectedBuilding]);
+    if (pickupPoints.length > 0 && !assignPickupPoint) {
+      setAssignPickupPoint(pickupPoints[0]);
+    }
+  }, [buildings, pickupPoints, selectedBuilding, assignBuilding, assignPickupPoint]);
 
   const showToast = (type: ToastType, message: string) => {
     const id = ++toastIdRef.current;
@@ -143,7 +174,7 @@ export default function PickupPage() {
   };
 
   const confirmPickup = (orderId: string, isScanMode = false) => {
-    const result = pickupOrder(orderId);
+    const result = pickupOrder(orderId, operatorName);
     if (result.success) {
       showToast('success', result.message);
       setFoundOrder(null);
@@ -163,7 +194,7 @@ export default function PickupPage() {
       showToast('info', '没有可核销的订单');
       return;
     }
-    const result = pickupOrders(ids);
+    const result = pickupOrders(ids, operatorName);
     if (result.failed === 0) {
       showToast('success', `${building} 已全部核销（${result.success}单）`);
     } else {
@@ -171,6 +202,42 @@ export default function PickupPage() {
         'info',
         `${building} 核销完成：成功 ${result.success} 单，失败 ${result.failed} 单`
       );
+    }
+  };
+
+  const handleBatchAssignByBuilding = () => {
+    if (!assignBuilding) {
+      showToast('error', '请选择楼栋');
+      return;
+    }
+    if (!volunteerName.trim()) {
+      showToast('error', '请输入志愿者姓名');
+      return;
+    }
+    const count = batchAssignByBuilding(assignBuilding, volunteerName.trim(), currentDate);
+    showToast('success', `已为 ${assignBuilding} 分配 ${count} 单给「${volunteerName.trim()}」`);
+    setRefreshKey((k) => k + 1);
+  };
+
+  const handleBatchAssignByPickupPoint = () => {
+    if (!assignPickupPoint) {
+      showToast('error', '请选择取货点');
+      return;
+    }
+    if (!volunteerName.trim()) {
+      showToast('error', '请输入志愿者姓名');
+      return;
+    }
+    const count = batchAssignByPickupPoint(assignPickupPoint, volunteerName.trim(), currentDate);
+    showToast('success', `已为取货点「${assignPickupPoint}」分配 ${count} 单给「${volunteerName.trim()}」`);
+    setRefreshKey((k) => k + 1);
+  };
+
+  const handleAssignOperator = (orderId: string, operator: string) => {
+    assignOrderOperator(orderId, operator);
+    setRefreshKey((k) => k + 1);
+    if (operator) {
+      showToast('success', '已更新分配');
     }
   };
 
@@ -190,14 +257,16 @@ export default function PickupPage() {
       const itemsStr = item.items.map((i) => `${i.productName}×${i.quantity}`).join(', ');
       const phone = item.neighborPhone;
       const maskedPhone = phone.slice(0, 3) + '****' + phone.slice(-4);
-      text += `${index + 1}. ${item.neighborName} ${item.room}室 ${maskedPhone} - ${itemsStr} - ¥${item.total.toFixed(2)}\n`;
+      const volStr = item.assignedOperator ? ` [志愿者：${item.assignedOperator}]` : '';
+      text += `${index + 1}. ${item.neighborName} ${item.room}室 ${maskedPhone}${volStr} - ${itemsStr} - ¥${item.total.toFixed(2)}\n`;
     });
     text += `\n未取总金额：¥${pendingTotal.toFixed(2)}\n\n`;
 
     text += `已取（${pickedTotal}户）：\n`;
     pickedList.forEach((item, index) => {
       const itemsStr = item.items.map((i) => `${i.productName}×${i.quantity}`).join(', ');
-      text += `${index + 1}. ${item.neighborName} ${item.room}室 - ${itemsStr} - ${item.pickupTime}\n`;
+      const opStr = item.operator ? ` [处理人：${item.operator}]` : '';
+      text += `${index + 1}. ${item.neighborName} ${item.room}室${opStr} - ${itemsStr} - ${item.pickupTime}\n`;
     });
 
     return text;
@@ -574,150 +643,385 @@ export default function PickupPage() {
           {/* 交接模式 */}
           {activeTab === 'handover' && (
             <div>
-              <div className="max-w-2xl mx-auto">
+              <div className="max-w-4xl mx-auto">
                 <h3 className="text-lg font-bold text-warm-800 mb-2 text-center">交接模式</h3>
                 <p className="text-sm text-warm-500 mb-6 text-center">按楼栋生成交接清单，便于与物业或志愿者交接</p>
 
-                {/* 楼栋选择 */}
-                <div className="mb-6">
-                  <label className="block text-sm font-medium text-warm-700 mb-2">选择楼栋</label>
-                  <div className="relative">
-                    <select
-                      value={selectedBuilding}
-                      onChange={(e) => setSelectedBuilding(e.target.value)}
-                      className="w-full h-12 px-4 pr-10 border border-warm-200 rounded-xl bg-white focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-50 appearance-none cursor-pointer"
-                    >
-                      {buildings.map((building) => (
-                        <option key={building} value={building}>
-                          {building}
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-warm-400 pointer-events-none" />
-                  </div>
+                {/* 处理人设置 */}
+                <div className="mb-6 bg-primary-50 rounded-xl p-4">
+                  <label className="block text-sm font-medium text-warm-700 mb-2 flex items-center gap-2">
+                    <User size={16} className="text-primary-500" />
+                    处理人设置（当前核销操作人）
+                  </label>
+                  <input
+                    type="text"
+                    value={operatorName}
+                    onChange={(e) => setOperatorName(e.target.value)}
+                    placeholder="请输入处理人姓名"
+                    className="w-full h-12 px-4 border border-warm-200 rounded-xl bg-white focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-50"
+                  />
                 </div>
 
-                {handoverReport && (
+                {/* 子Tab 切换 */}
+                <div className="flex gap-2 mb-6">
+                  <button
+                    onClick={() => setHandoverSubTab('building')}
+                    className={`flex-1 h-12 rounded-xl font-medium flex items-center justify-center gap-2 transition-colors ${
+                      handoverSubTab === 'building'
+                        ? 'bg-primary-500 text-white shadow-sm'
+                        : 'bg-warm-100 text-warm-600 hover:bg-warm-200'
+                    }`}
+                  >
+                    <Building2 size={18} />
+                    楼栋清单
+                  </button>
+                  <button
+                    onClick={() => setHandoverSubTab('volunteer')}
+                    className={`flex-1 h-12 rounded-xl font-medium flex items-center justify-center gap-2 transition-colors ${
+                      handoverSubTab === 'volunteer'
+                        ? 'bg-primary-500 text-white shadow-sm'
+                        : 'bg-warm-100 text-warm-600 hover:bg-warm-200'
+                    }`}
+                  >
+                    <Users size={18} />
+                    志愿者分工
+                  </button>
+                </div>
+
+                {/* 楼栋清单子Tab */}
+                {handoverSubTab === 'building' && (
                   <>
-                    {/* 统计信息 */}
-                    <div className="grid grid-cols-2 gap-4 mb-6">
-                      <div className="bg-warning-50 rounded-xl p-4 text-center">
-                        <p className="text-sm text-warm-500 mb-1">未取户数</p>
-                        <p className="text-2xl font-bold text-warning-600">{handoverReport.pendingList.length} 户</p>
-                        <p className="text-sm text-warm-500 mt-1">¥{handoverReport.pendingTotal.toFixed(2)}</p>
+                    {/* 楼栋选择 */}
+                    <div className="mb-6">
+                      <label className="block text-sm font-medium text-warm-700 mb-2">选择楼栋</label>
+                      <div className="relative">
+                        <select
+                          value={selectedBuilding}
+                          onChange={(e) => setSelectedBuilding(e.target.value)}
+                          className="w-full h-12 px-4 pr-10 border border-warm-200 rounded-xl bg-white focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-50 appearance-none cursor-pointer"
+                        >
+                          {buildings.map((building) => (
+                            <option key={building} value={building}>
+                              {building}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronDown size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-warm-400 pointer-events-none" />
                       </div>
-                      <div className="bg-success-50 rounded-xl p-4 text-center">
-                        <p className="text-sm text-warm-500 mb-1">已取户数</p>
-                        <p className="text-2xl font-bold text-success-600">{handoverReport.pickedTotal} 户</p>
-                      </div>
                     </div>
 
-                    {/* 清单切换 */}
-                    <div className="flex gap-2 mb-4">
-                      <button
-                        onClick={() => setHandoverListType('pending')}
-                        className={`flex-1 h-10 rounded-lg font-medium transition-colors ${
-                          handoverListType === 'pending'
-                            ? 'bg-warning-500 text-white'
-                            : 'bg-warm-100 text-warm-600 hover:bg-warm-200'
-                        }`}
-                      >
-                        未取清单
-                      </button>
-                      <button
-                        onClick={() => setHandoverListType('picked')}
-                        className={`flex-1 h-10 rounded-lg font-medium transition-colors ${
-                          handoverListType === 'picked'
-                            ? 'bg-success-500 text-white'
-                            : 'bg-warm-100 text-warm-600 hover:bg-warm-200'
-                        }`}
-                      >
-                        已取清单
-                      </button>
-                    </div>
+                    {handoverReport && (
+                      <>
+                        {/* 统计信息 */}
+                        <div className="grid grid-cols-2 gap-4 mb-6">
+                          <div className="bg-warning-50 rounded-xl p-4 text-center">
+                            <p className="text-sm text-warm-500 mb-1">未取户数</p>
+                            <p className="text-2xl font-bold text-warning-600">{handoverReport.pendingList.length} 户</p>
+                            <p className="text-sm text-warm-500 mt-1">¥{handoverReport.pendingTotal.toFixed(2)}</p>
+                          </div>
+                          <div className="bg-success-50 rounded-xl p-4 text-center">
+                            <p className="text-sm text-warm-500 mb-1">已取户数</p>
+                            <p className="text-2xl font-bold text-success-600">{handoverReport.pickedTotal} 户</p>
+                          </div>
+                        </div>
 
-                    {/* 导出和复制按钮 */}
-                    <div className="flex gap-3 mb-4">
-                      <button
-                        onClick={handleExport}
-                        className="flex-1 h-10 rounded-lg bg-primary-50 text-primary-600 font-medium flex items-center justify-center gap-2 hover:bg-primary-100 transition-colors btn-press"
-                      >
-                        <Download size={16} />
-                        导出
-                      </button>
-                      <button
-                        onClick={handleCopyToClipboard}
-                        className="flex-1 h-10 rounded-lg bg-primary-500 text-white font-medium flex items-center justify-center gap-2 hover:bg-primary-600 transition-colors btn-press"
-                      >
-                        <Clipboard size={16} />
-                        复制
-                      </button>
-                    </div>
+                        {/* 清单切换 */}
+                        <div className="flex gap-2 mb-4">
+                          <button
+                            onClick={() => setHandoverListType('pending')}
+                            className={`flex-1 h-10 rounded-lg font-medium transition-colors ${
+                              handoverListType === 'pending'
+                                ? 'bg-warning-500 text-white'
+                                : 'bg-warm-100 text-warm-600 hover:bg-warm-200'
+                            }`}
+                          >
+                            未取清单
+                          </button>
+                          <button
+                            onClick={() => setHandoverListType('picked')}
+                            className={`flex-1 h-10 rounded-lg font-medium transition-colors ${
+                              handoverListType === 'picked'
+                                ? 'bg-success-500 text-white'
+                                : 'bg-warm-100 text-warm-600 hover:bg-warm-200'
+                            }`}
+                          >
+                            已取清单
+                          </button>
+                        </div>
 
-                    {/* 未取清单 */}
-                    {handoverListType === 'pending' && (
-                      <div className="space-y-2 max-h-96 overflow-y-auto">
-                        {handoverReport.pendingList.length > 0 ? (
-                          handoverReport.pendingList.map((item, index) => (
-                            <div key={item.orderId} className="bg-white border border-warm-100 rounded-xl p-4">
-                              <div className="flex items-start justify-between mb-2">
-                                <div className="flex items-center gap-2">
-                                  <span className="w-6 h-6 rounded-full bg-warning-100 text-warning-600 text-xs font-bold flex items-center justify-center">
-                                    {index + 1}
-                                  </span>
-                                  <span className="font-semibold text-warm-800">{item.neighborName}</span>
-                                  <span className="text-sm text-warm-500">{item.room}室</span>
+                        {/* 导出和复制按钮 */}
+                        <div className="flex gap-3 mb-4">
+                          <button
+                            onClick={handleExport}
+                            className="flex-1 h-10 rounded-lg bg-primary-50 text-primary-600 font-medium flex items-center justify-center gap-2 hover:bg-primary-100 transition-colors btn-press"
+                          >
+                            <Download size={16} />
+                            导出
+                          </button>
+                          <button
+                            onClick={handleCopyToClipboard}
+                            className="flex-1 h-10 rounded-lg bg-primary-500 text-white font-medium flex items-center justify-center gap-2 hover:bg-primary-600 transition-colors btn-press"
+                          >
+                            <Clipboard size={16} />
+                            复制
+                          </button>
+                        </div>
+
+                        {/* 未取清单 */}
+                        {handoverListType === 'pending' && (
+                          <div className="space-y-2 max-h-96 overflow-y-auto">
+                            {handoverReport.pendingList.length > 0 ? (
+                              handoverReport.pendingList.map((item, index) => (
+                                <div key={item.orderId} className="bg-white border border-warm-100 rounded-xl p-4">
+                                  <div className="flex items-start justify-between mb-2">
+                                    <div className="flex items-center gap-2">
+                                      <span className="w-6 h-6 rounded-full bg-warning-100 text-warning-600 text-xs font-bold flex items-center justify-center">
+                                        {index + 1}
+                                      </span>
+                                      <span className="font-semibold text-warm-800">{item.neighborName}</span>
+                                      <span className="text-sm text-warm-500">{item.room}室</span>
+                                    </div>
+                                    <span className="font-bold text-primary-500">¥{item.total.toFixed(2)}</span>
+                                  </div>
+                                  <div className="flex items-center gap-2 text-sm text-warm-500 mb-2">
+                                    <Phone size={12} />
+                                    <span>{item.neighborPhone.slice(0, 3)}****{item.neighborPhone.slice(-4)}</span>
+                                  </div>
+                                  <div className="text-sm text-warm-600 mb-2">
+                                    {item.items.map((i) => `${i.productName}×${i.quantity}`).join('、')}
+                                  </div>
+                                  {item.assignedOperator && (
+                                    <div className="flex items-center gap-2 pt-2 border-t border-warm-100">
+                                      <User size={12} className="text-primary-500" />
+                                      <span className="text-xs text-warm-500">分配志愿者：</span>
+                                      <span className="text-xs font-medium text-primary-600 bg-primary-50 px-2 py-0.5 rounded-full">
+                                        {item.assignedOperator}
+                                      </span>
+                                    </div>
+                                  )}
                                 </div>
-                                <span className="font-bold text-primary-500">¥{item.total.toFixed(2)}</span>
+                              ))
+                            ) : (
+                              <div className="text-center py-8">
+                                <div className="text-4xl mb-3">✅</div>
+                                <p className="text-warm-500">该楼栋已全部取货</p>
                               </div>
-                              <div className="flex items-center gap-2 text-sm text-warm-500 mb-2">
-                                <Phone size={12} />
-                                <span>{item.neighborPhone.slice(0, 3)}****{item.neighborPhone.slice(-4)}</span>
-                              </div>
-                              <div className="text-sm text-warm-600">
-                                {item.items.map((i) => `${i.productName}×${i.quantity}`).join('、')}
-                              </div>
-                            </div>
-                          ))
-                        ) : (
-                          <div className="text-center py-8">
-                            <div className="text-4xl mb-3">✅</div>
-                            <p className="text-warm-500">该楼栋已全部取货</p>
+                            )}
                           </div>
                         )}
-                      </div>
-                    )}
 
-                    {/* 已取清单 */}
-                    {handoverListType === 'picked' && (
-                      <div className="space-y-2 max-h-96 overflow-y-auto">
-                        {handoverReport.pickedList.length > 0 ? (
-                          handoverReport.pickedList.map((item, index) => (
-                            <div key={item.orderId} className="bg-white border border-warm-100 rounded-xl p-4">
-                              <div className="flex items-start justify-between mb-2">
-                                <div className="flex items-center gap-2">
-                                  <span className="w-6 h-6 rounded-full bg-success-100 text-success-600 text-xs font-bold flex items-center justify-center">
-                                    {index + 1}
-                                  </span>
-                                  <span className="font-semibold text-warm-800">{item.neighborName}</span>
-                                  <span className="text-sm text-warm-500">{item.room}室</span>
+                        {/* 已取清单 */}
+                        {handoverListType === 'picked' && (
+                          <div className="space-y-2 max-h-96 overflow-y-auto">
+                            {handoverReport.pickedList.length > 0 ? (
+                              handoverReport.pickedList.map((item, index) => (
+                                <div key={item.orderId} className="bg-white border border-warm-100 rounded-xl p-4">
+                                  <div className="flex items-start justify-between mb-2">
+                                    <div className="flex items-center gap-2">
+                                      <span className="w-6 h-6 rounded-full bg-success-100 text-success-600 text-xs font-bold flex items-center justify-center">
+                                        {index + 1}
+                                      </span>
+                                      <span className="font-semibold text-warm-800">{item.neighborName}</span>
+                                      <span className="text-sm text-warm-500">{item.room}室</span>
+                                    </div>
+                                    <span className="text-sm text-warm-500">{item.pickupTime}</span>
+                                  </div>
+                                  <div className="text-sm text-warm-600 mb-2">
+                                    {item.items.map((i) => `${i.productName}×${i.quantity}`).join('、')}
+                                  </div>
+                                  {item.operator && (
+                                    <div className="flex items-center gap-2 pt-2 border-t border-warm-100">
+                                      <User size={12} className="text-success-500" />
+                                      <span className="text-xs text-warm-500">处理人：</span>
+                                      <span className="text-xs font-medium text-success-600 bg-success-50 px-2 py-0.5 rounded-full">
+                                        {item.operator}
+                                      </span>
+                                    </div>
+                                  )}
                                 </div>
-                                <span className="text-sm text-warm-500">{item.pickupTime}</span>
+                              ))
+                            ) : (
+                              <div className="text-center py-8">
+                                <div className="text-4xl mb-3">📦</div>
+                                <p className="text-warm-500">该楼栋暂无已取订单</p>
                               </div>
-                              <div className="text-sm text-warm-600">
-                                {item.items.map((i) => `${i.productName}×${i.quantity}`).join('、')}
-                              </div>
-                            </div>
-                          ))
-                        ) : (
-                          <div className="text-center py-8">
-                            <div className="text-4xl mb-3">📦</div>
-                            <p className="text-warm-500">该楼栋暂无已取订单</p>
+                            )}
                           </div>
                         )}
-                      </div>
+                      </>
                     )}
                   </>
+                )}
+
+                {/* 志愿者分工子Tab */}
+                {handoverSubTab === 'volunteer' && (
+                  <div className="space-y-6">
+                    {/* 分配模式切换 */}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setAssignMode('building')}
+                        className={`flex-1 h-10 rounded-lg font-medium text-sm transition-colors ${
+                          assignMode === 'building'
+                            ? 'bg-warm-700 text-white'
+                            : 'bg-warm-100 text-warm-600 hover:bg-warm-200'
+                        }`}
+                      >
+                        按楼栋分配
+                      </button>
+                      <button
+                        onClick={() => setAssignMode('pickupPoint')}
+                        className={`flex-1 h-10 rounded-lg font-medium text-sm transition-colors ${
+                          assignMode === 'pickupPoint'
+                            ? 'bg-warm-700 text-white'
+                            : 'bg-warm-100 text-warm-600 hover:bg-warm-200'
+                        }`}
+                      >
+                        按取货点分配
+                      </button>
+                    </div>
+
+                    {/* 选择楼栋 */}
+                    {assignMode === 'building' && (
+                      <div>
+                        <label className="block text-sm font-medium text-warm-700 mb-2">选择楼栋</label>
+                        <div className="relative">
+                          <select
+                            value={assignBuilding}
+                            onChange={(e) => setAssignBuilding(e.target.value)}
+                            className="w-full h-12 px-4 pr-10 border border-warm-200 rounded-xl bg-white focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-50 appearance-none cursor-pointer"
+                          >
+                            {buildings.map((building) => (
+                              <option key={building} value={building}>
+                                {building}
+                              </option>
+                            ))}
+                          </select>
+                          <ChevronDown size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-warm-400 pointer-events-none" />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 选择取货点 */}
+                    {assignMode === 'pickupPoint' && (
+                      <div>
+                        <label className="block text-sm font-medium text-warm-700 mb-2">选择取货点</label>
+                        <div className="relative">
+                          <select
+                            value={assignPickupPoint}
+                            onChange={(e) => setAssignPickupPoint(e.target.value)}
+                            className="w-full h-12 px-4 pr-10 border border-warm-200 rounded-xl bg-white focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-50 appearance-none cursor-pointer"
+                          >
+                            {pickupPoints.length > 0 ? (
+                              pickupPoints.map((point) => (
+                                <option key={point} value={point}>
+                                  {point}
+                                </option>
+                              ))
+                            ) : (
+                              <option value="">暂无取货点</option>
+                            )}
+                          </select>
+                          <ChevronDown size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-warm-400 pointer-events-none" />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 志愿者姓名 */}
+                    <div>
+                      <label className="block text-sm font-medium text-warm-700 mb-2">志愿者姓名</label>
+                      <input
+                        type="text"
+                        value={volunteerName}
+                        onChange={(e) => setVolunteerName(e.target.value)}
+                        placeholder="请输入志愿者姓名"
+                        className="w-full h-12 px-4 border border-warm-200 rounded-xl bg-white focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-50"
+                      />
+                    </div>
+
+                    {/* 批量分配按钮 */}
+                    <div>
+                      {assignMode === 'building' ? (
+                        <button
+                          onClick={handleBatchAssignByBuilding}
+                          className="w-full h-12 rounded-xl bg-gradient-to-r from-primary-500 to-primary-600 text-white font-medium flex items-center justify-center gap-2 hover:from-primary-600 hover:to-primary-700 transition-all btn-press"
+                        >
+                          <Sparkles size={18} />
+                          按楼栋批量分配
+                        </button>
+                      ) : (
+                        <button
+                          onClick={handleBatchAssignByPickupPoint}
+                          className="w-full h-12 rounded-xl bg-gradient-to-r from-primary-500 to-primary-600 text-white font-medium flex items-center justify-center gap-2 hover:from-primary-600 hover:to-primary-700 transition-all btn-press"
+                        >
+                          <Sparkles size={18} />
+                          按取货点分配
+                        </button>
+                      )}
+                    </div>
+
+                    {/* 分配清单 */}
+                    <div className="pt-4 border-t border-warm-100">
+                      <h4 className="font-bold text-warm-800 mb-4 flex items-center gap-2">
+                        <Clipboard size={16} className="text-primary-500" />
+                        分配清单（今日待取订单）
+                      </h4>
+
+                      {pendingOrders.length > 0 ? (
+                        <div className="space-y-2 max-h-[500px] overflow-y-auto">
+                          {pendingOrders.map((order) => {
+                            const info = getNeighborDisplayInfo(order.neighborId);
+                            const assignedOp = getAssignedOperator(order.id);
+                            return (
+                              <div
+                                key={order.id}
+                                className="bg-white border border-warm-100 rounded-xl p-4"
+                              >
+                                <div className="flex items-start justify-between gap-4">
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2 mb-1">
+                                      <span className="text-xs font-mono text-warm-400">{order.orderNo}</span>
+                                    </div>
+                                    <div className="flex items-center gap-2 mb-1">
+                                      <span className="font-semibold text-warm-800">{info.name || '邻居'}</span>
+                                      <span className="text-sm text-warm-500">{info.room}室</span>
+                                      <span className="text-xs text-warm-400">· {info.building}</span>
+                                    </div>
+                                    <div className="text-xs text-warm-500 truncate">
+                                      {order.items.map((i) => `${i.productName}×${i.quantity}`).join('、')}
+                                    </div>
+                                  </div>
+                                  <div className="flex-shrink-0 w-32">
+                                    <label className="block text-xs text-warm-400 mb-1">分配志愿者</label>
+                                    <div className="relative">
+                                      <select
+                                        value={assignedOp || ''}
+                                        onChange={(e) => handleAssignOperator(order.id, e.target.value)}
+                                        className="w-full h-9 px-2 pr-8 text-xs border border-warm-200 rounded-lg bg-white focus:outline-none focus:border-primary-400 appearance-none cursor-pointer"
+                                      >
+                                        <option value="">未分配</option>
+                                        {allOperators.map((op) => (
+                                          <option key={op} value={op}>{op}</option>
+                                        ))}
+                                        {volunteerName.trim() && !allOperators.includes(volunteerName.trim()) && (
+                                          <option value={volunteerName.trim()}>{volunteerName.trim()}</option>
+                                        )}
+                                      </select>
+                                      <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-warm-400 pointer-events-none" />
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="text-center py-8">
+                          <div className="text-4xl mb-3">🎉</div>
+                          <p className="text-warm-500">暂无待取订单需要分配</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 )}
               </div>
             </div>

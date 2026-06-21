@@ -1,5 +1,5 @@
-import type { Product, Order, Neighbor, AfterSale, Supplier, OrderItem } from '../types';
-import { format, addDays } from 'date-fns';
+import type { Product, Order, Neighbor, AfterSale, Supplier, OrderItem, StockMovement } from '../types';
+import { format, addDays, addMinutes } from 'date-fns';
 
 const today = format(new Date(), 'yyyy-MM-dd');
 const tomorrow = format(addDays(new Date(), 1), 'yyyy-MM-dd');
@@ -23,54 +23,114 @@ const productData: { [key: string]: Partial<Product> } = {
   'prod-008': { supplierId: 'sup-003', cost: 42 },
 };
 
+function createStockMovements(productId: string, initialStock: number, sold: number, finalStock: number, isSoldOut: boolean, isActive: boolean): StockMovement[] {
+  const movements: StockMovement[] = [];
+  let currentStock = 0;
+  let ts = new Date(`${yesterday}T08:00:00`);
+
+  movements.push({
+    id: `sm-${productId}-1`,
+    productId,
+    type: 'restock',
+    quantity: initialStock,
+    stockBefore: 0,
+    stockAfter: initialStock,
+    operator: '团长',
+    timestamp: ts.toISOString(),
+    remark: '初始上架补货',
+  });
+  currentStock = initialStock;
+
+  if (sold > 0) {
+    ts = addMinutes(ts, 120);
+    movements.push({
+      id: `sm-${productId}-2`,
+      productId,
+      type: 'sold',
+      quantity: sold,
+      stockBefore: currentStock,
+      stockAfter: currentStock - sold,
+      operator: '系统',
+      timestamp: ts.toISOString(),
+      remark: `售出${sold}件`,
+    });
+    currentStock = currentStock - sold;
+  }
+
+  if (!isActive && isSoldOut === false) {
+    ts = addMinutes(ts, 60);
+    movements.push({
+      id: `sm-${productId}-3`,
+      productId,
+      type: 'offline',
+      quantity: 0,
+      stockBefore: currentStock,
+      stockAfter: currentStock,
+      operator: '团长',
+      timestamp: ts.toISOString(),
+      remark: '临时下架',
+    });
+  }
+
+  return movements;
+}
+
 export const mockProducts: Product[] = [
   {
     id: 'prod-001', name: '烟台红富士苹果', image: '🍎', price: 29.9, cost: 18,
     limitPerPerson: 5, stock: 100, stockAvailable: 32, sold: 68, category: '水果',
     date: today, cutoffTime: '18:00', pickupPoint: '小区东门自提点',
     supplierId: 'sup-001', isActive: true, isSoldOut: false,
+    stockMovements: createStockMovements('prod-001', 100, 68, 32, false, true),
   },
   {
     id: 'prod-002', name: '有机蔬菜套餐', image: '🥬', price: 39.9, cost: 25,
     limitPerPerson: 2, stock: 50, stockAvailable: 8, sold: 42, category: '蔬菜',
     date: today, cutoffTime: '18:00', pickupPoint: '小区东门自提点',
     supplierId: 'sup-002', isActive: true, isSoldOut: false,
+    stockMovements: createStockMovements('prod-002', 50, 42, 8, false, true),
   },
   {
     id: 'prod-003', name: '东海带鱼段', image: '🐟', price: 45, cost: 32,
     limitPerPerson: 3, stock: 30, stockAvailable: 5, sold: 25, category: '海鲜',
     date: today, cutoffTime: '16:00', pickupPoint: '小区东门自提点',
     supplierId: 'sup-003', isActive: true, isSoldOut: false,
+    stockMovements: createStockMovements('prod-003', 30, 25, 5, false, true),
   },
   {
     id: 'prod-004', name: '手工吐司面包', image: '🍞', price: 18.8, cost: 10,
     limitPerPerson: 2, stock: 40, stockAvailable: 0, sold: 40, category: '烘焙',
     date: today, cutoffTime: '20:00', pickupPoint: '小区便利店',
     supplierId: 'sup-004', isActive: true, isSoldOut: true,
+    stockMovements: createStockMovements('prod-004', 40, 40, 0, true, true),
   },
   {
     id: 'prod-005', name: '海南香蕉', image: '🍌', price: 15.9, cost: 8,
     limitPerPerson: 3, stock: 80, stockAvailable: 25, sold: 55, category: '水果',
     date: today, cutoffTime: '18:00', pickupPoint: '小区东门自提点',
     supplierId: 'sup-001', isActive: true, isSoldOut: false,
+    stockMovements: createStockMovements('prod-005', 80, 55, 25, false, true),
   },
   {
     id: 'prod-006', name: '土鸡蛋(30枚)', image: '🥚', price: 35, cost: 22,
     limitPerPerson: 2, stock: 60, stockAvailable: 0, sold: 60, category: '蛋类',
     date: today, cutoffTime: '18:00', pickupPoint: '小区东门自提点',
     supplierId: 'sup-002', isActive: true, isSoldOut: true,
+    stockMovements: createStockMovements('prod-006', 60, 60, 0, true, true),
   },
   {
     id: 'prod-007', name: '智利车厘子', image: '🍒', price: 89.9, cost: 65,
     limitPerPerson: 1, stock: 20, stockAvailable: 20, sold: 0, category: '水果',
     date: tomorrow, cutoffTime: '12:00', pickupPoint: '小区东门自提点',
     supplierId: 'sup-001', isActive: true, isSoldOut: false,
+    stockMovements: createStockMovements('prod-007', 20, 0, 20, false, true),
   },
   {
     id: 'prod-008', name: '鲜虾', image: '🦐', price: 58, cost: 42,
     limitPerPerson: 2, stock: 25, stockAvailable: 25, sold: 0, category: '海鲜',
     date: tomorrow, cutoffTime: '16:00', pickupPoint: '小区东门自提点',
     supplierId: 'sup-003', isActive: false, isSoldOut: false,
+    stockMovements: createStockMovements('prod-008', 25, 0, 25, false, false),
   },
 ];
 

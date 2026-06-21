@@ -40,16 +40,20 @@ interface SelectedItem {
 export default function AfterSalePage() {
   const {
     currentDate,
+    operatorName,
     getDailySummary,
     getSupplierSettlement,
     getDateRangeSummary,
     afterSales,
     orders,
+    neighbors,
     suppliers,
     addAfterSale,
     addAfterSaleWithBreakdown,
     updateAfterSaleStatus,
-    neighbors,
+    getNeighborDisplayInfo,
+    setCurrentDate,
+    getOrdersByDate,
   } = useAppStore();
 
   const [showAddModal, setShowAddModal] = useState(false);
@@ -69,6 +73,7 @@ export default function AfterSalePage() {
     startDate: currentDate,
     endDate: currentDate,
   });
+  const [expandedSuppliers, setExpandedSuppliers] = useState<Set<string>>(new Set());
 
   const summary = getDailySummary(currentDate);
   const supplierSettlement = getSupplierSettlement(currentDate);
@@ -76,8 +81,24 @@ export default function AfterSalePage() {
     if (activeTab === 'summary') {
       return getDateRangeSummary(dateRange.startDate, dateRange.endDate);
     }
-    return [];
+    return { list: [], total: {} as any, swapped: false };
   }, [activeTab, dateRange.startDate, dateRange.endDate, getDateRangeSummary]);
+
+  const toggleSupplierExpand = (supplierId: string) => {
+    setExpandedSuppliers((prev) => {
+      const next = new Set(prev);
+      if (next.has(supplierId)) {
+        next.delete(supplierId);
+      } else {
+        next.add(supplierId);
+      }
+      return next;
+    });
+  };
+
+  const handleDateRangeChange = (field: 'startDate' | 'endDate', value: string) => {
+    setDateRange((prev) => ({ ...prev, [field]: value }));
+  };
 
   const dateDisplay = format(new Date(currentDate), 'M月d日 EEEE', { locale: zhCN });
 
@@ -276,24 +297,14 @@ export default function AfterSalePage() {
   ];
 
   const dateRangeTotals = useMemo(() => {
-    return dateRangeSummary.reduce(
-      (acc, item) => ({
-        leaderIncome: acc.leaderIncome + item.leaderIncome,
-        supplierPayable: acc.supplierPayable + item.supplierPayable,
-        afterSaleDeduction: acc.afterSaleDeduction + item.afterSaleDeduction,
-        pendingRefund: acc.pendingRefund + item.pendingRefund,
-        totalOrders: acc.totalOrders + item.totalOrders,
-        totalOrderAmount: acc.totalOrderAmount + item.totalOrderAmount,
-      }),
-      {
-        leaderIncome: 0,
-        supplierPayable: 0,
-        afterSaleDeduction: 0,
-        pendingRefund: 0,
-        totalOrders: 0,
-        totalOrderAmount: 0,
-      }
-    );
+    return dateRangeSummary.total || {
+      leaderIncome: 0,
+      supplierPayable: 0,
+      afterSaleDeduction: 0,
+      pendingRefund: 0,
+      totalOrders: 0,
+      totalOrderAmount: 0,
+    };
   }, [dateRangeSummary]);
 
   return (
@@ -480,77 +491,150 @@ export default function AfterSalePage() {
           {activeTab === 'settlement' && (
             <div>
               <div className="space-y-3">
-                {supplierSettlement.map((item, index) => (
-                  <div
-                    key={item.supplierId}
-                    className="p-4 bg-warm-50/50 rounded-xl animate-slide-up"
-                    style={{ animationDelay: `${index * 50}ms` }}
-                  >
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-secondary-50 flex items-center justify-center">
-                          <Truck size={20} className="text-secondary-500" />
-                        </div>
-                        <div>
-                          <h4 className="font-medium text-warm-800">{item.supplierName}</h4>
-                          <p className="text-xs text-warm-500">今日供货结算</p>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-xs text-warm-500">应结算</p>
-                        <p className="text-lg font-bold text-secondary-600 tabular-nums">
-                          ¥{item.settlementAmount.toFixed(2)}
-                        </p>
-                      </div>
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-3 pt-3 border-t border-warm-200/50 mb-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-warm-500">供货金额</span>
-                        <span className="text-sm font-medium text-warm-700 tabular-nums">
-                          ¥{item.totalSupply.toFixed(2)}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-warm-500">售后扣除</span>
-                        <span className="text-sm font-medium text-danger-500 tabular-nums">
-                          -¥{item.totalRefund.toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
-
-                    {item.deductionDetails.length > 0 && (
-                      <div className="pt-3 border-t border-warm-200/50">
-                        <div className="flex items-center gap-2 mb-2">
-                          <MinusCircle size={14} className="text-danger-500" />
-                          <span className="text-sm font-medium text-warm-700">扣款明细</span>
-                          <span className="text-xs text-warm-400">共 {item.deductionDetails.length} 笔</span>
-                        </div>
-                        <div className="space-y-2">
-                          {item.deductionDetails.map((detail) => {
-                            const detailTypeCfg = afterSaleTypes.find((t) => t.value === detail.type);
-                            return (
-                              <div
-                                key={detail.afterSaleId + detail.amount}
-                                className="flex items-center justify-between p-2.5 bg-white rounded-lg border border-warm-100"
-                              >
-                                <div className="flex items-center gap-2 flex-1 min-w-0">
-                                  <span className={`px-2 py-0.5 text-xs font-medium rounded-full shrink-0 ${detailTypeCfg?.badgeColor}`}>
-                                    {detailTypeCfg?.label}
-                                  </span>
-                                  <span className="text-xs text-warm-500 truncate">{detail.reason}</span>
-                                </div>
-                                <span className="text-sm font-medium text-danger-500 tabular-nums shrink-0 ml-2">
-                                  -¥{detail.amount.toFixed(2)}
+                {supplierSettlement.map((item, index) => {
+                  const isExpanded = expandedSuppliers.has(item.supplierId);
+                  const calcSettlement = (item.totalSupply - item.totalRefund).toFixed(2);
+                  const actualSettlement = item.settlementAmount.toFixed(2);
+                  const isValid = calcSettlement === actualSettlement;
+                  return (
+                    <div
+                      key={item.supplierId}
+                      className="bg-warm-50/50 rounded-xl animate-slide-up overflow-hidden"
+                      style={{ animationDelay: `${index * 50}ms` }}
+                    >
+                      <button
+                        onClick={() => toggleSupplierExpand(item.supplierId)}
+                        className="w-full p-4 flex items-center justify-between text-left hover:bg-warm-50 transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-xl bg-secondary-50 flex items-center justify-center">
+                            <Truck size={20} className="text-secondary-500" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h4 className="font-medium text-warm-800">{item.supplierName}</h4>
+                              {item.deductionDetails.length > 0 && (
+                                <span className="px-1.5 py-0.5 text-xs rounded-full bg-danger-100 text-danger-600">
+                                  {item.deductionDetails.length}笔扣款
                                 </span>
-                              </div>
-                            );
-                          })}
+                              )}
+                            </div>
+                            <p className="text-xs text-warm-500">今日供货结算</p>
+                          </div>
                         </div>
+                        <div className="flex items-center gap-4">
+                          <div className="text-right">
+                            <p className="text-xs text-warm-500">应结算</p>
+                            <p className="text-lg font-bold text-secondary-600 tabular-nums">
+                              ¥{actualSettlement}
+                            </p>
+                          </div>
+                          <ChevronDown
+                            size={20}
+                            className={`text-warm-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                          />
+                        </div>
+                      </button>
+
+                      <div className={`px-4 pb-4 ${!isExpanded ? 'hidden' : ''}`}>
+                        <div className="grid grid-cols-2 gap-3 pt-3 border-t border-warm-200/50 mb-4">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm text-warm-500">供货金额</span>
+                            <span className="text-sm font-medium text-warm-700 tabular-nums">
+                              ¥{item.totalSupply.toFixed(2)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm text-warm-500">售后扣除</span>
+                            <span className="text-sm font-medium text-danger-500 tabular-nums">
+                              -¥{item.totalRefund.toFixed(2)}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className={`mb-4 p-3 rounded-lg flex items-center gap-2 text-sm ${
+                          isValid ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+                        }`}>
+                          {isValid ? (
+                            <CheckCircle size={16} />
+                          ) : (
+                            <XCircle size={16} />
+                          )}
+                          <span className="font-mono text-xs">
+                            {isValid ? '校验通过: ' : '校验异常: '}
+                            ¥{item.totalSupply.toFixed(2)} - ¥{item.totalRefund.toFixed(2)} = ¥{calcSettlement}
+                          </span>
+                        </div>
+
+                        {item.deductionDetails.length > 0 ? (
+                          <div className="overflow-x-auto rounded-lg border border-warm-200">
+                            <div className="flex items-center gap-2 px-4 py-2.5 bg-warm-100 border-b border-warm-200">
+                              <MinusCircle size={14} className="text-danger-500" />
+                              <span className="text-sm font-medium text-warm-700">商品级扣款明细</span>
+                            </div>
+                            <table className="w-full text-sm">
+                              <thead>
+                                <tr className="bg-white border-b border-warm-200">
+                                  <th className="px-3 py-2 text-left font-medium text-warm-600">订单号</th>
+                                  <th className="px-3 py-2 text-left font-medium text-warm-600">商品</th>
+                                  <th className="px-3 py-2 text-right font-medium text-warm-600">数量</th>
+                                  <th className="px-3 py-2 text-right font-medium text-warm-600">金额</th>
+                                  <th className="px-3 py-2 text-center font-medium text-warm-600">类型</th>
+                                  <th className="px-3 py-2 text-left font-medium text-warm-600">原因</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {item.deductionDetails.map((detail, dIdx) => {
+                                  const detailTypeCfg = afterSaleTypes.find((t) => t.value === detail.type);
+                                  return (
+                                    <tr
+                                      key={`${detail.afterSaleId}-${dIdx}`}
+                                      className="border-b border-warm-100 last:border-b-0 hover:bg-warm-50/50 transition-colors"
+                                    >
+                                      <td className="px-3 py-2.5 text-warm-600 font-mono text-xs whitespace-nowrap">
+                                        {detail.orderNo || '-'}
+                                      </td>
+                                      <td className="px-3 py-2.5 text-warm-800 whitespace-nowrap">
+                                        {detail.productName || '-'}
+                                      </td>
+                                      <td className="px-3 py-2.5 text-right text-warm-700 tabular-nums">
+                                        {detail.quantity || 0}
+                                      </td>
+                                      <td className="px-3 py-2.5 text-right font-medium text-danger-500 tabular-nums whitespace-nowrap">
+                                        -¥{detail.amount.toFixed(2)}
+                                      </td>
+                                      <td className="px-3 py-2.5 text-center">
+                                        <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${detailTypeCfg?.badgeColor || 'bg-warm-100 text-warm-600'}`}>
+                                          {detailTypeCfg?.label || detail.type}
+                                        </span>
+                                      </td>
+                                      <td className="px-3 py-2.5 text-warm-500 text-xs max-w-[200px] truncate" title={detail.reason}>
+                                        {detail.reason || '-'}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                              <tfoot>
+                                <tr className="bg-warm-50 font-medium">
+                                  <td colSpan={3} className="px-3 py-2.5 text-right text-warm-700">扣款合计</td>
+                                  <td className="px-3 py-2.5 text-right text-danger-600 tabular-nums font-bold whitespace-nowrap">
+                                    -¥{item.totalRefund.toFixed(2)}
+                                  </td>
+                                  <td colSpan={2}></td>
+                                </tr>
+                              </tfoot>
+                            </table>
+                          </div>
+                        ) : (
+                          <div className="p-6 bg-white rounded-lg border border-dashed border-warm-200 text-center">
+                            <p className="text-warm-400 text-sm">今日无售后扣款记录</p>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                ))}
+                    </div>
+                  );
+                })}
               </div>
 
               <div className="mt-5 p-4 bg-gradient-to-r from-secondary-500 to-secondary-600 rounded-xl text-white">
@@ -579,7 +663,7 @@ export default function AfterSalePage() {
                   <input
                     type="date"
                     value={dateRange.startDate}
-                    onChange={(e) => setDateRange((prev) => ({ ...prev, startDate: e.target.value }))}
+                    onChange={(e) => handleDateRangeChange('startDate', e.target.value)}
                     className="h-10 px-3 border border-warm-200 rounded-lg focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-50 bg-white text-sm"
                   />
                 </div>
@@ -589,13 +673,20 @@ export default function AfterSalePage() {
                   <input
                     type="date"
                     value={dateRange.endDate}
-                    onChange={(e) => setDateRange((prev) => ({ ...prev, endDate: e.target.value }))}
+                    onChange={(e) => handleDateRangeChange('endDate', e.target.value)}
                     className="h-10 px-3 border border-warm-200 rounded-lg focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-50 bg-white text-sm"
                   />
                 </div>
               </div>
 
-              {dateRangeSummary.length > 0 ? (
+              {dateRangeSummary.swapped && (
+                <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg flex items-center gap-2 text-yellow-700 text-sm animate-fade-in">
+                  <AlertTriangle size={16} />
+                  <span>日期已自动纠正</span>
+                </div>
+              )}
+
+              {dateRangeSummary.list && dateRangeSummary.list.length > 0 ? (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
@@ -610,7 +701,7 @@ export default function AfterSalePage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {dateRangeSummary.map((item, index) => (
+                      {dateRangeSummary.list.map((item, index) => (
                         <tr
                           key={item.date}
                           className="border-b border-warm-100 hover:bg-warm-50/50 transition-colors animate-slide-up"
@@ -644,22 +735,22 @@ export default function AfterSalePage() {
                       <tr className="bg-primary-50 font-medium">
                         <td className="px-4 py-3 text-warm-800 font-bold">合计</td>
                         <td className="px-4 py-3 text-right text-green-600 tabular-nums font-bold">
-                          ¥{dateRangeTotals.leaderIncome.toFixed(2)}
+                          ¥{(dateRangeTotals.leaderIncome || 0).toFixed(2)}
                         </td>
                         <td className="px-4 py-3 text-right text-secondary-600 tabular-nums font-bold">
-                          ¥{dateRangeTotals.supplierPayable.toFixed(2)}
+                          ¥{(dateRangeTotals.supplierPayable || 0).toFixed(2)}
                         </td>
                         <td className="px-4 py-3 text-right text-danger-500 tabular-nums font-bold">
-                          -¥{dateRangeTotals.afterSaleDeduction.toFixed(2)}
+                          -¥{(dateRangeTotals.afterSaleDeduction || 0).toFixed(2)}
                         </td>
                         <td className="px-4 py-3 text-right text-orange-500 tabular-nums font-bold">
-                          ¥{dateRangeTotals.pendingRefund.toFixed(2)}
+                          ¥{(dateRangeTotals.pendingRefund || 0).toFixed(2)}
                         </td>
                         <td className="px-4 py-3 text-right text-warm-700 tabular-nums font-bold">
-                          {dateRangeTotals.totalOrders}
+                          {dateRangeTotals.totalOrders || 0}
                         </td>
                         <td className="px-4 py-3 text-right text-warm-800 tabular-nums font-bold">
-                          ¥{dateRangeTotals.totalOrderAmount.toFixed(2)}
+                          ¥{(dateRangeTotals.totalOrderAmount || 0).toFixed(2)}
                         </td>
                       </tr>
                     </tfoot>
