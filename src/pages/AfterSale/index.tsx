@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import {
@@ -11,13 +11,13 @@ import {
   Truck,
   Plus,
   X,
-  Clock,
   CheckCircle,
   XCircle,
   FileText,
   Users,
   ShoppingCart,
   ArrowRight,
+  MinusCircle,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import type { AfterSaleType, AfterSaleStatus } from '../../types';
@@ -44,12 +44,20 @@ export default function AfterSalePage() {
     supplierId: '',
     reason: '',
     amount: 0,
+    affectsSupplier: true,
   });
 
   const summary = getDailySummary(currentDate);
   const supplierSettlement = getSupplierSettlement(currentDate);
   
   const dateDisplay = format(new Date(currentDate), 'M月d日 EEEE', { locale: zhCN });
+
+  useEffect(() => {
+    setFormData((prev) => ({
+      ...prev,
+      affectsSupplier: prev.type !== 'reissue',
+    }));
+  }, [formData.type]);
 
   const todayAfterSales = useMemo(() => {
     return afterSales
@@ -75,25 +83,82 @@ export default function AfterSalePage() {
       supplierId: '',
       reason: '',
       amount: 0,
+      affectsSupplier: true,
     });
   };
 
-  const afterSaleTypes: { value: AfterSaleType; label: string; icon: React.ReactNode; color: string }[] = [
-    { value: 'out_of_stock', label: '缺货', icon: <PackageX size={18} />, color: 'bg-warning-50 text-warning-600 border-warning-200' },
-    { value: 'damaged', label: '破损', icon: <AlertTriangle size={18} />, color: 'bg-danger-50 text-danger-600 border-danger-200' },
-    { value: 'refund', label: '退款', icon: <RotateCcw size={18} />, color: 'bg-primary-50 text-primary-600 border-primary-200' },
-    { value: 'reissue', label: '补发', icon: <Truck size={18} />, color: 'bg-secondary-50 text-secondary-600 border-secondary-200' },
+  const afterSaleTypes: { value: AfterSaleType; label: string; icon: React.ReactNode; color: string; badgeColor: string }[] = [
+    { value: 'out_of_stock', label: '缺货', icon: <PackageX size={18} />, color: 'bg-orange-50 text-orange-600 border-orange-200', badgeColor: 'bg-orange-100 text-orange-700' },
+    { value: 'damaged', label: '破损', icon: <AlertTriangle size={18} />, color: 'bg-red-50 text-red-600 border-red-200', badgeColor: 'bg-red-100 text-red-700' },
+    { value: 'refund', label: '退款', icon: <RotateCcw size={18} />, color: 'bg-teal-50 text-teal-600 border-teal-200', badgeColor: 'bg-teal-100 text-teal-700' },
+    { value: 'reissue', label: '补发', icon: <Truck size={18} />, color: 'bg-green-50 text-green-600 border-green-200', badgeColor: 'bg-green-100 text-green-700' },
   ];
 
   const statusConfig: Record<AfterSaleStatus, { label: string; color: string }> = {
-    pending: { label: '待处理', color: 'bg-warning-50 text-warning-600' },
-    processed: { label: '已处理', color: 'bg-success-50 text-success-600' },
+    pending: { label: '待处理', color: 'bg-orange-50 text-orange-600' },
+    processed: { label: '已处理', color: 'bg-green-50 text-green-600' },
     closed: { label: '已关闭', color: 'bg-warm-100 text-warm-500' },
   };
 
+  const summaryCards = [
+    {
+      icon: <DollarSign className="text-orange-500" />,
+      label: '当日应收',
+      value: summary.totalReceivable.toFixed(2),
+      unit: '元',
+      bgColor: 'bg-orange-50',
+      trend: 'up' as const,
+      trendText: '订单总额',
+    },
+    {
+      icon: <TrendingUp className="text-green-500" />,
+      label: '当日已收',
+      value: summary.totalReceived.toFixed(2),
+      unit: '元',
+      bgColor: 'bg-green-50',
+      trend: 'up' as const,
+      trendText: '已支付订单',
+    },
+    {
+      icon: <RotateCcw className="text-teal-500" />,
+      label: '退款金额',
+      value: summary.totalRefund.toFixed(2),
+      unit: '元',
+      bgColor: 'bg-teal-50',
+      trend: 'down' as const,
+      trendText: 'type=refund',
+    },
+    {
+      icon: <PackageX className="text-orange-600" />,
+      label: '缺货金额',
+      value: summary.totalOutOfStock.toFixed(2),
+      unit: '元',
+      bgColor: 'bg-orange-100',
+      trend: 'down' as const,
+      trendText: '缺货扣除',
+    },
+    {
+      icon: <AlertTriangle className="text-red-500" />,
+      label: '破损金额',
+      value: summary.totalDamaged.toFixed(2),
+      unit: '元',
+      bgColor: 'bg-red-50',
+      trend: 'down' as const,
+      trendText: '破损扣除',
+    },
+    {
+      icon: <Truck className="text-green-600" />,
+      label: '补发金额',
+      value: summary.totalReissue.toFixed(2),
+      unit: '元',
+      bgColor: 'bg-green-100',
+      trend: 'neutral' as const,
+      trendText: '补发成本',
+    },
+  ];
+
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* 日期 */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-lg font-bold text-warm-800">{dateDisplay}</span>
@@ -110,47 +175,12 @@ export default function AfterSalePage() {
         </button>
       </div>
 
-      {/* 数据汇总卡片 */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <SummaryCard
-          icon={<DollarSign className="text-warning-500" />}
-          label="当日应收"
-          value={summary.totalReceivable.toFixed(2)}
-          unit="元"
-          bgColor="bg-warning-50"
-          trend="up"
-          trendText="订单总额"
-        />
-        <SummaryCard
-          icon={<TrendingUp className="text-success-500" />}
-          label="当日已收"
-          value={summary.totalReceived.toFixed(2)}
-          unit="元"
-          bgColor="bg-success-50"
-          trend="up"
-          trendText="已支付订单"
-        />
-        <SummaryCard
-          icon={<TrendingDown className="text-danger-500" />}
-          label="待退金额"
-          value={summary.totalRefund.toFixed(2)}
-          unit="元"
-          bgColor="bg-danger-50"
-          trend="down"
-          trendText="需退款金额"
-        />
-        <SummaryCard
-          icon={<FileText className="text-secondary-500" />}
-          label="供应商对账"
-          value={supplierSettlement.reduce((sum, s) => sum + s.settlementAmount, 0).toFixed(2)}
-          unit="元"
-          bgColor="bg-secondary-50"
-          trend="neutral"
-          trendText="应结算总额"
-        />
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+        {summaryCards.map((card, index) => (
+          <SummaryCard key={index} {...card} />
+        ))}
       </div>
 
-      {/* Tab 切换 */}
       <div className="bg-white rounded-2xl shadow-card overflow-hidden">
         <div className="flex border-b border-warm-100">
           <button
@@ -183,7 +213,6 @@ export default function AfterSalePage() {
         </div>
 
         <div className="p-5">
-          {/* 售后列表 */}
           {activeTab === 'list' && (
             <div>
               {todayAfterSales.length > 0 ? (
@@ -207,12 +236,19 @@ export default function AfterSalePage() {
                         </div>
                         
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="font-medium text-warm-800">{typeCfg?.label}</span>
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
+                            <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${typeCfg?.badgeColor}`}>
+                              {typeCfg?.label}
+                            </span>
                             <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${statusCfg.color}`}>
                               {statusCfg.label}
                             </span>
                             <span className="text-xs text-warm-400">{time}</span>
+                            {item.affectsSupplier && (
+                              <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-warm-100 text-warm-600">
+                                影响供应商扣款
+                              </span>
+                            )}
                           </div>
                           
                           <p className="text-sm text-warm-600 mb-2 line-clamp-1">{item.reason}</p>
@@ -246,7 +282,7 @@ export default function AfterSalePage() {
                           {item.status === 'pending' && (
                             <button
                               onClick={() => updateAfterSaleStatus(item.id, 'processed')}
-                              className="mt-2 px-3 h-7 text-xs font-medium text-success-600 bg-success-50 rounded-lg hover:bg-success-100 transition-colors"
+                              className="mt-2 px-3 h-7 text-xs font-medium text-green-600 bg-green-50 rounded-lg hover:bg-green-100 transition-colors"
                             >
                               标记处理
                             </button>
@@ -266,7 +302,6 @@ export default function AfterSalePage() {
             </div>
           )}
 
-          {/* 供应商对账 */}
           {activeTab === 'settlement' && (
             <div>
               <div className="space-y-3">
@@ -294,7 +329,7 @@ export default function AfterSalePage() {
                       </div>
                     </div>
                     
-                    <div className="grid grid-cols-2 gap-3 pt-3 border-t border-warm-200/50">
+                    <div className="grid grid-cols-2 gap-3 pt-3 border-t border-warm-200/50 mb-3">
                       <div className="flex items-center justify-between">
                         <span className="text-sm text-warm-500">供货金额</span>
                         <span className="text-sm font-medium text-warm-700 tabular-nums">
@@ -308,11 +343,41 @@ export default function AfterSalePage() {
                         </span>
                       </div>
                     </div>
+
+                    {item.deductionDetails.length > 0 && (
+                      <div className="pt-3 border-t border-warm-200/50">
+                        <div className="flex items-center gap-2 mb-2">
+                          <MinusCircle size={14} className="text-danger-500" />
+                          <span className="text-sm font-medium text-warm-700">扣款明细</span>
+                          <span className="text-xs text-warm-400">共 {item.deductionDetails.length} 笔</span>
+                        </div>
+                        <div className="space-y-2">
+                          {item.deductionDetails.map((detail) => {
+                            const detailTypeCfg = afterSaleTypes.find((t) => t.value === detail.type);
+                            return (
+                              <div
+                                key={detail.afterSaleId}
+                                className="flex items-center justify-between p-2.5 bg-white rounded-lg border border-warm-100"
+                              >
+                                <div className="flex items-center gap-2 flex-1 min-w-0">
+                                  <span className={`px-2 py-0.5 text-xs font-medium rounded-full shrink-0 ${detailTypeCfg?.badgeColor}`}>
+                                    {detailTypeCfg?.label}
+                                  </span>
+                                  <span className="text-xs text-warm-500 truncate">{detail.reason}</span>
+                                </div>
+                                <span className="text-sm font-medium text-danger-500 tabular-nums shrink-0 ml-2">
+                                  -¥{detail.amount.toFixed(2)}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
 
-              {/* 汇总 */}
               <div className="mt-5 p-4 bg-gradient-to-r from-secondary-500 to-secondary-600 rounded-xl text-white">
                 <div className="flex items-center justify-between">
                   <div>
@@ -332,7 +397,6 @@ export default function AfterSalePage() {
         </div>
       </div>
 
-      {/* 添加售后模态框 */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 animate-fade-in">
           <div className="bg-white rounded-2xl shadow-card-lg w-full max-w-md animate-slide-up">
@@ -347,7 +411,6 @@ export default function AfterSalePage() {
             </div>
 
             <form onSubmit={handleSubmit} className="p-5 space-y-4">
-              {/* 售后类型选择 */}
               <div>
                 <label className="block text-sm font-medium text-warm-700 mb-2">
                   售后类型
@@ -371,7 +434,6 @@ export default function AfterSalePage() {
                 </div>
               </div>
 
-              {/* 关联订单 */}
               <div>
                 <label className="block text-sm font-medium text-warm-700 mb-1.5">
                   关联订单
@@ -400,7 +462,6 @@ export default function AfterSalePage() {
                 </select>
               </div>
 
-              {/* 供应商 */}
               <div>
                 <label className="block text-sm font-medium text-warm-700 mb-1.5">
                   涉及供应商
@@ -419,7 +480,6 @@ export default function AfterSalePage() {
                 </select>
               </div>
 
-              {/* 金额 */}
               <div>
                 <label className="block text-sm font-medium text-warm-700 mb-1.5">
                   售后金额 (元)
@@ -434,7 +494,6 @@ export default function AfterSalePage() {
                 />
               </div>
 
-              {/* 原因 */}
               <div>
                 <label className="block text-sm font-medium text-warm-700 mb-1.5">
                   售后原因
@@ -446,6 +505,28 @@ export default function AfterSalePage() {
                   placeholder="请描述售后原因..."
                   required
                 />
+              </div>
+
+              <div className="flex items-center justify-between p-3 bg-warm-50 rounded-xl">
+                <div>
+                  <p className="text-sm font-medium text-warm-700">是否影响供应商扣款</p>
+                  <p className="text-xs text-warm-500 mt-0.5">
+                    {formData.type === 'reissue' ? '补发默认不扣款' : '退款/缺货/破损默认扣款'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setFormData({ ...formData, affectsSupplier: !formData.affectsSupplier })}
+                  className={`relative w-12 h-7 rounded-full transition-colors ${
+                    formData.affectsSupplier ? 'bg-primary-500' : 'bg-warm-300'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow transition-transform ${
+                      formData.affectsSupplier ? 'translate-x-5.5' : 'translate-x-0.5'
+                    }`}
+                  />
+                </button>
               </div>
 
               <div className="flex gap-3 pt-2">
@@ -495,7 +576,7 @@ function SummaryCard({
           {icon}
         </div>
         <div className={`flex items-center gap-1 text-xs ${
-          trend === 'up' ? 'text-success-500' : trend === 'down' ? 'text-danger-500' : 'text-warm-400'
+          trend === 'up' ? 'text-green-500' : trend === 'down' ? 'text-danger-500' : 'text-warm-400'
         }`}>
           {trend === 'up' && <TrendingUp size={14} />}
           {trend === 'down' && <TrendingDown size={14} />}

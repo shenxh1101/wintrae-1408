@@ -56,6 +56,7 @@ export interface Neighbor {
   frequentCategories: string[];
   remark: string;
   isBlacklisted: boolean;
+  blacklistReason: string;
   createdAt: string;
 }
 
@@ -67,6 +68,7 @@ export interface AfterSale {
   type: AfterSaleType;
   reason: string;
   amount: number;
+  affectsSupplier: boolean;
   status: AfterSaleStatus;
   createdAt: string;
 }
@@ -91,4 +93,5 @@ export interface SupplierSettlement {
   totalSupply: number;
   totalRefund: number;
   settlementAmount: number;
+  deductionDetails: { afterSaleId: string; type: AfterSaleType; amount: number; reason: string }[];
 }

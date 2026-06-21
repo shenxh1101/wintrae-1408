@@ -1,6 +1,9 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Product, Order, Neighbor, AfterSale, Supplier, PickupStatus, PayStatus, AfterSaleType, AfterSaleStatus } from '../types';
+import type {
+  Product, Order, Neighbor, AfterSale, Supplier,
+  PickupStatus, PayStatus, AfterSaleType, AfterSaleStatus,
+} from '../types';
 import { mockProducts, mockOrders, mockNeighbors, mockAfterSales, mockSuppliers } from '../data/mockData';
 import { format } from 'date-fns';
 
@@ -12,39 +15,58 @@ interface AppState {
   suppliers: Supplier[];
   currentDate: string;
   sidebarCollapsed: boolean;
-  
+
   setCurrentDate: (date: string) => void;
   toggleSidebar: () => void;
-  
+
   addProduct: (product: Omit<Product, 'id' | 'sold'>) => void;
   updateProduct: (id: string, updates: Partial<Product>) => void;
   deleteProduct: (id: string) => void;
   toggleProductActive: (id: string) => void;
-  
+
   updateOrderPayStatus: (id: string, status: PayStatus) => void;
-  pickupOrder: (id: string) => void;
+  pickupOrder: (id: string) => { success: boolean; message: string };
+  pickupOrders: (ids: string[]) => { success: number; failed: number };
   addOrder: (order: Omit<Order, 'id'>) => void;
-  
+
   addNeighbor: (neighbor: Omit<Neighbor, 'id' | 'createdAt'>) => void;
   updateNeighbor: (id: string, updates: Partial<Neighbor>) => void;
-  toggleBlacklist: (id: string) => void;
-  
+  toggleBlacklist: (id: string, reason?: string) => void;
+
   addAfterSale: (afterSale: Omit<AfterSale, 'id' | 'createdAt' | 'status'>) => void;
   updateAfterSaleStatus: (id: string, status: AfterSaleStatus) => void;
-  
+
   getProductsByDate: (date: string) => Product[];
+  getActiveProductsByDate: (date: string) => Product[];
   getOrdersByDate: (date: string) => Order[];
   getPendingPickupOrders: (date: string) => Order[];
   getDailySummary: (date: string) => {
     totalReceivable: number;
     totalReceived: number;
     totalRefund: number;
+    totalReissue: number;
+    totalOutOfStock: number;
+    totalDamaged: number;
     totalProducts: number;
+    activeProducts: number;
     totalOrders: number;
     pickedOrders: number;
     pendingPickup: number;
   };
-  getSupplierSettlement: (date: string) => { supplierId: string; supplierName: string; totalSupply: number; totalRefund: number; settlementAmount: number }[];
+  getSupplierSettlement: (date: string) => {
+    supplierId: string;
+    supplierName: string;
+    totalSupply: number;
+    totalRefund: number;
+    settlementAmount: number;
+    deductionDetails: {
+      afterSaleId: string;
+      type: AfterSaleType;
+      amount: number;
+      reason: string;
+    }[];
+  }[];
+  getNeighborById: (id: string) => Neighbor | undefined;
 }
 
 export const useAppStore = create<AppState>()(
@@ -101,12 +123,37 @@ export const useAppStore = create<AppState>()(
       },
 
       pickupOrder: (id) => {
+        const order = get().orders.find((o) => o.id === id);
+        if (!order) return { success: false, message: '订单不存在' };
+        if (order.pickupStatus === 'picked') return { success: false, message: '订单已核销，请勿重复操作' };
+        if (order.payStatus !== 'paid') return { success: false, message: '订单尚未支付' };
+
         const now = format(new Date(), 'HH:mm');
         set((state) => ({
           orders: state.orders.map((o) =>
             o.id === id ? { ...o, pickupStatus: 'picked' as PickupStatus, pickupTime: now } : o
           ),
         }));
+        return { success: true, message: '核销成功' };
+      },
+
+      pickupOrders: (ids) => {
+        let success = 0;
+        let failed = 0;
+        const now = format(new Date(), 'HH:mm');
+
+        set((state) => ({
+          orders: state.orders.map((o) => {
+            if (!ids.includes(o.id)) return o;
+            if (o.pickupStatus === 'picked' || o.payStatus !== 'paid') {
+              failed++;
+              return o;
+            }
+            success++;
+            return { ...o, pickupStatus: 'picked' as PickupStatus, pickupTime: now };
+          }),
+        }));
+        return { success, failed };
       },
 
       addOrder: (order) => {
@@ -122,6 +169,7 @@ export const useAppStore = create<AppState>()(
           ...neighbor,
           id: `nei-${Date.now()}`,
           createdAt: format(new Date(), 'yyyy-MM-dd'),
+          blacklistReason: neighbor.blacklistReason || '',
         };
         set((state) => ({ neighbors: [...state.neighbors, newNeighbor] }));
       },
@@ -134,11 +182,17 @@ export const useAppStore = create<AppState>()(
         }));
       },
 
-      toggleBlacklist: (id) => {
+      toggleBlacklist: (id, reason) => {
         set((state) => ({
-          neighbors: state.neighbors.map((n) =>
-            n.id === id ? { ...n, isBlacklisted: !n.isBlacklisted } : n
-          ),
+          neighbors: state.neighbors.map((n) => {
+            if (n.id !== id) return n;
+            const newIsBlack = !n.isBlacklisted;
+            return {
+              ...n,
+              isBlacklisted: newIsBlack,
+              blacklistReason: newIsBlack ? (reason || '') : '',
+            };
+          }),
         }));
       },
 
@@ -148,6 +202,7 @@ export const useAppStore = create<AppState>()(
           id: `as-${Date.now()}`,
           status: 'pending' as AfterSaleStatus,
           createdAt: new Date().toISOString(),
+          affectsSupplier: afterSale.affectsSupplier ?? (afterSale.type !== 'reissue'),
         };
         set((state) => ({ afterSales: [...state.afterSales, newAfterSale] }));
       },
@@ -162,6 +217,10 @@ export const useAppStore = create<AppState>()(
 
       getProductsByDate: (date) => {
         return get().products.filter((p) => p.date === date);
+      },
+
+      getActiveProductsByDate: (date) => {
+        return get().products.filter((p) => p.date === date && p.isActive);
       },
 
       getOrdersByDate: (date) => {
@@ -181,23 +240,45 @@ export const useAppStore = create<AppState>()(
           return saleDate === date;
         });
 
-        const totalReceivable = orders.reduce((sum, o) => sum + o.totalAmount, 0);
+        const calcItemsSum = (o: Order) =>
+          o.items.reduce((s, it) => s + it.price * it.quantity, 0);
+
+        const totalReceivable = orders.reduce((sum, o) => sum + calcItemsSum(o), 0);
         const totalReceived = orders
           .filter((o) => o.payStatus === 'paid')
-          .reduce((sum, o) => sum + o.totalAmount, 0);
+          .reduce((sum, o) => sum + calcItemsSum(o), 0);
+
         const totalRefund = afterSales
-          .filter((a) => a.type === 'refund' || a.type === 'damaged')
+          .filter((a) => a.type === 'refund')
           .reduce((sum, a) => sum + a.amount, 0);
-        const totalProducts = get().products.filter((p) => p.date === date).length;
+        const totalReissue = afterSales
+          .filter((a) => a.type === 'reissue')
+          .reduce((sum, a) => sum + a.amount, 0);
+        const totalOutOfStock = afterSales
+          .filter((a) => a.type === 'out_of_stock')
+          .reduce((sum, a) => sum + a.amount, 0);
+        const totalDamaged = afterSales
+          .filter((a) => a.type === 'damaged')
+          .reduce((sum, a) => sum + a.amount, 0);
+
+        const dayProducts = get().products.filter((p) => p.date === date);
+        const totalProducts = dayProducts.length;
+        const activeProducts = dayProducts.filter((p) => p.isActive).length;
         const totalOrders = orders.length;
         const pickedOrders = orders.filter((o) => o.pickupStatus === 'picked').length;
-        const pendingPickup = orders.filter((o) => o.pickupStatus === 'pending' && o.payStatus === 'paid').length;
+        const pendingPickup = orders.filter(
+          (o) => o.pickupStatus === 'pending' && o.payStatus === 'paid'
+        ).length;
 
         return {
           totalReceivable,
           totalReceived,
           totalRefund,
+          totalReissue,
+          totalOutOfStock,
+          totalDamaged,
           totalProducts,
+          activeProducts,
           totalOrders,
           pickedOrders,
           pendingPickup,
@@ -214,7 +295,7 @@ export const useAppStore = create<AppState>()(
 
         return suppliers.map((supplier) => {
           const supplierProducts = products.filter((p) => p.supplierId === supplier.id);
-          
+
           let totalSupply = 0;
           dateOrders.forEach((order) => {
             order.items.forEach((item) => {
@@ -225,12 +306,17 @@ export const useAppStore = create<AppState>()(
             });
           });
 
-          let totalRefund = 0;
-          dateAfterSales
-            .filter((a) => a.supplierId === supplier.id)
-            .forEach((a) => {
-              totalRefund += a.amount;
-            });
+          const relevantAfterSales = dateAfterSales.filter(
+            (a) => a.supplierId === supplier.id && a.affectsSupplier
+          );
+          let totalRefund = relevantAfterSales.reduce((sum, a) => sum + a.amount, 0);
+
+          const deductionDetails = relevantAfterSales.map((a) => ({
+            afterSaleId: a.id,
+            type: a.type,
+            amount: a.amount,
+            reason: a.reason,
+          }));
 
           return {
             supplierId: supplier.id,
@@ -238,12 +324,17 @@ export const useAppStore = create<AppState>()(
             totalSupply,
             totalRefund,
             settlementAmount: totalSupply - totalRefund,
+            deductionDetails,
           };
         });
       },
+
+      getNeighborById: (id) => {
+        return get().neighbors.find((n) => n.id === id);
+      },
     }),
     {
-      name: 'tuanzhang-storage',
+      name: 'tuanzhang-storage-v2',
       partialize: (state) => ({
         products: state.products,
         orders: state.orders,

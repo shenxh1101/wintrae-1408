@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { format, addDays, subDays, isToday } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import {
@@ -15,6 +15,11 @@ import {
   X,
   Check,
   XCircle,
+  ArrowUpCircle,
+  ArrowDownCircle,
+  Filter,
+  Users,
+  BarChart3,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import type { Product } from '../../types';
@@ -25,14 +30,18 @@ export default function ProductsPage() {
     setCurrentDate,
     getProductsByDate,
     getDailySummary,
+    getActiveProductsByDate,
     addProduct,
     updateProduct,
     deleteProduct,
     toggleProductActive,
+    suppliers,
   } = useAppStore();
 
   const [showModal, setShowModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [selectedPickupPoint, setSelectedPickupPoint] = useState<string>('all');
+  const [selectedSupplier, setSelectedSupplier] = useState<string>('all');
   const [formData, setFormData] = useState({
     name: '',
     image: '🍎',
@@ -47,8 +56,26 @@ export default function ProductsPage() {
     isActive: true,
   });
 
-  const products = getProductsByDate(currentDate);
+  const allProducts = getProductsByDate(currentDate);
+  const activeProducts = getActiveProductsByDate(currentDate);
   const summary = getDailySummary(currentDate);
+
+  const pickupPoints = useMemo(() => {
+    const points = new Set(allProducts.map((p) => p.pickupPoint));
+    return Array.from(points);
+  }, [allProducts]);
+
+  const filteredProducts = useMemo(() => {
+    return allProducts.filter((product) => {
+      const matchPickup = selectedPickupPoint === 'all' || product.pickupPoint === selectedPickupPoint;
+      const matchSupplier = selectedSupplier === 'all' || product.supplierId === selectedSupplier;
+      return matchPickup && matchSupplier;
+    });
+  }, [allProducts, selectedPickupPoint, selectedSupplier]);
+
+  const totalSoldPieces = useMemo(() => {
+    return activeProducts.reduce((sum, p) => sum + p.sold, 0);
+  }, [activeProducts]);
 
   const goPrevDay = () => setCurrentDate(format(subDays(new Date(currentDate), 1), 'yyyy-MM-dd'));
   const goNextDay = () => setCurrentDate(format(addDays(new Date(currentDate), 1), 'yyyy-MM-dd'));
@@ -109,11 +136,14 @@ export default function ProductsPage() {
   const dateDisplay = format(new Date(currentDate), 'M月d日 EEEE', { locale: zhCN });
   const isTodayDate = isToday(new Date(currentDate));
 
+  const getSupplierName = (id: string) => {
+    return suppliers.find((s) => s.id === id)?.name || id;
+  };
+
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* 日期导航 */}
-      <div className="bg-white rounded-2xl shadow-card p-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
+      <div className="bg-white rounded-2xl shadow-card p-4 flex items-center justify-between flex-wrap gap-4">
+        <div className="flex items-center gap-3 flex-wrap">
           <button
             onClick={goPrevDay}
             className="w-9 h-9 rounded-full bg-warm-50 hover:bg-warm-100 flex items-center justify-center text-warm-600 transition-colors btn-press"
@@ -156,53 +186,102 @@ export default function ProductsPage() {
         </button>
       </div>
 
-      {/* 统计卡片 */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="bg-white rounded-2xl shadow-card p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Filter size={16} className="text-warm-500" />
+          <span className="text-sm font-medium text-warm-700">筛选条件</span>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <div className="flex items-center gap-2">
+            <MapPin size={14} className="text-warm-400" />
+            <select
+              value={selectedPickupPoint}
+              onChange={(e) => setSelectedPickupPoint(e.target.value)}
+              className="h-9 px-3 border border-warm-200 rounded-xl text-sm focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100 bg-white"
+            >
+              <option value="all">全部取货点</option>
+              {pickupPoints.map((point) => (
+                <option key={point} value={point}>
+                  {point}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <Users size={14} className="text-warm-400" />
+            <select
+              value={selectedSupplier}
+              onChange={(e) => setSelectedSupplier(e.target.value)}
+              className="h-9 px-3 border border-warm-200 rounded-xl text-sm focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100 bg-white"
+            >
+              <option value="all">全部供应商</option>
+              {suppliers.map((supplier) => (
+                <option key={supplier.id} value={supplier.id}>
+                  {supplier.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         <StatCard
           icon={<Package className="text-primary-500" />}
-          label="在售商品"
+          label="总商品数"
           value={summary.totalProducts}
           unit="件"
           bgColor="bg-primary-50"
         />
         <StatCard
-          icon={<ShoppingCart className="text-secondary-500" />}
-          label="今日订单"
-          value={summary.totalOrders}
-          unit="单"
+          icon={<Check className="text-success-500" />}
+          label="在售中"
+          value={summary.activeProducts}
+          unit="件"
+          bgColor="bg-success-50"
+        />
+        <StatCard
+          icon={<BarChart3 className="text-secondary-500" />}
+          label="已售总件数"
+          value={totalSoldPieces}
+          unit="件"
           bgColor="bg-secondary-50"
         />
         <StatCard
-          icon={<DollarSign className="text-success-500" />}
+          icon={<ShoppingCart className="text-warning-500" />}
+          label="今日订单"
+          value={summary.totalOrders}
+          unit="单"
+          bgColor="bg-warning-50"
+        />
+        <StatCard
+          icon={<DollarSign className="text-success-600" />}
           label="销售金额"
           value={summary.totalReceivable.toFixed(2)}
           unit="元"
           bgColor="bg-success-50"
         />
-        <StatCard
-          icon={<Clock className="text-warning-500" />}
-          label="待取货"
-          value={summary.pendingPickup}
-          unit="单"
-          bgColor="bg-warning-50"
-        />
       </div>
 
-      {/* 取货点信息 */}
-      {products.length > 0 && (
-        <div className="bg-white rounded-2xl shadow-card p-4 flex items-center gap-3">
+      {filteredProducts.length > 0 && (
+        <div className="bg-white rounded-2xl shadow-card p-4 flex items-center gap-3 flex-wrap">
           <MapPin size={20} className="text-primary-500" />
           <span className="text-sm text-warm-600">取货点：</span>
-          <span className="text-sm font-medium text-warm-800">{products[0]?.pickupPoint}</span>
+          <span className="text-sm font-medium text-warm-800">{filteredProducts[0]?.pickupPoint}</span>
           <span className="text-sm text-warm-600 ml-4">截单时间：</span>
-          <span className="text-sm font-medium text-warm-800">{products[0]?.cutoffTime}</span>
+          <span className="text-sm font-medium text-warm-800">{filteredProducts[0]?.cutoffTime}</span>
+          {selectedSupplier !== 'all' && (
+            <>
+              <span className="text-sm text-warm-600 ml-4">供应商：</span>
+              <span className="text-sm font-medium text-warm-800">{getSupplierName(selectedSupplier)}</span>
+            </>
+          )}
         </div>
       )}
 
-      {/* 商品网格 */}
-      {products.length > 0 ? (
+      {filteredProducts.length > 0 ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-          {products.map((product, index) => (
+          {filteredProducts.map((product, index) => (
             <ProductCard
               key={product.id}
               product={product}
@@ -210,27 +289,31 @@ export default function ProductsPage() {
               onEdit={() => openEditModal(product)}
               onDelete={() => handleDelete(product.id)}
               onToggleActive={() => toggleProductActive(product.id)}
+              supplierName={getSupplierName(product.supplierId)}
             />
           ))}
         </div>
       ) : (
         <div className="bg-white rounded-2xl shadow-card p-12 text-center">
           <div className="text-5xl mb-4">📦</div>
-          <p className="text-warm-500 mb-4">当天还没有上架商品</p>
-          <button
-            onClick={openAddModal}
-            className="px-4 py-2 bg-primary-500 text-white rounded-xl font-medium hover:bg-primary-600 transition-colors btn-press"
-          >
-            立即上架
-          </button>
+          <p className="text-warm-500 mb-4">
+            {allProducts.length === 0 ? '当天还没有上架商品' : '没有符合筛选条件的商品'}
+          </p>
+          {allProducts.length === 0 && (
+            <button
+              onClick={openAddModal}
+              className="px-4 py-2 bg-primary-500 text-white rounded-xl font-medium hover:bg-primary-600 transition-colors btn-press"
+            >
+              立即上架
+            </button>
+          )}
         </div>
       )}
 
-      {/* 商品编辑模态框 */}
       {showModal && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-white rounded-2xl shadow-card-lg w-full max-w-md animate-slide-up">
-            <div className="flex items-center justify-between p-5 border-b border-warm-100">
+          <div className="bg-white rounded-2xl shadow-card-lg w-full max-w-md animate-slide-up max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between p-5 border-b border-warm-100 sticky top-0 bg-white z-10">
               <h2 className="text-lg font-bold text-warm-800">
                 {editingProduct ? '编辑商品' : '新增商品'}
               </h2>
@@ -369,6 +452,23 @@ export default function ProductsPage() {
                 </div>
               </div>
 
+              <div>
+                <label className="block text-sm font-medium text-warm-700 mb-1.5">
+                  供应商
+                </label>
+                <select
+                  value={formData.supplierId}
+                  onChange={(e) => setFormData({ ...formData, supplierId: e.target.value })}
+                  className="w-full h-10 px-3 border border-warm-200 rounded-xl focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100 bg-white"
+                >
+                  {suppliers.map((supplier) => (
+                    <option key={supplier.id} value={supplier.id}>
+                      {supplier.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div className="flex items-center justify-between pt-2">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
@@ -441,22 +541,35 @@ function ProductCard({
   onEdit,
   onDelete,
   onToggleActive,
+  supplierName,
 }: {
   product: Product;
   index: number;
   onEdit: () => void;
   onDelete: () => void;
   onToggleActive: () => void;
+  supplierName: string;
 }) {
-  const progress = product.stock > 0 ? (product.sold / product.stock) * 100 : 0;
+  const progress = product.isActive && product.stock > 0 ? (product.sold / product.stock) * 100 : 0;
 
   return (
     <div
-      className={`bg-white rounded-2xl shadow-card overflow-hidden card-transition animate-slide-up ${
-        !product.isActive ? 'opacity-60' : ''
+      className={`bg-white rounded-2xl shadow-card overflow-hidden card-transition animate-slide-up relative ${
+        !product.isActive ? 'opacity-70' : ''
       }`}
       style={{ animationDelay: `${index * 50}ms` }}
     >
+      {!product.isActive && (
+        <div className="absolute inset-0 z-10 pointer-events-none">
+          <div className="absolute inset-0 bg-warm-900/10" />
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rotate-[-20deg]">
+            <span className="px-6 py-2 bg-danger-500/90 text-white text-lg font-bold rounded-xl shadow-lg border-2 border-danger-400">
+              已下架
+            </span>
+          </div>
+        </div>
+      )}
+
       <div className="relative h-32 bg-gradient-to-br from-warm-50 to-warm-100 flex items-center justify-center">
         <span className="text-6xl">{product.image}</span>
         <div className="absolute top-3 left-3">
@@ -467,14 +580,14 @@ function ProductCard({
         <div className="absolute top-3 right-3">
           <button
             onClick={onToggleActive}
-            className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${
+            className={`w-10 h-10 rounded-full flex items-center justify-center transition-all shadow-md ${
               product.isActive
-                ? 'bg-success-50 text-success-500 hover:bg-success-100'
-                : 'bg-warm-100 text-warm-400 hover:bg-warm-200'
+                ? 'bg-danger-500 text-white hover:bg-danger-600 hover:scale-105'
+                : 'bg-success-500 text-white hover:bg-success-600 hover:scale-105'
             }`}
             title={product.isActive ? '点击下架' : '点击上架'}
           >
-            {product.isActive ? <Check size={16} /> : <XCircle size={16} />}
+            {product.isActive ? <ArrowDownCircle size={20} /> : <ArrowUpCircle size={20} />}
           </button>
         </div>
         <div className="absolute bottom-3 right-3">
@@ -485,7 +598,11 @@ function ProductCard({
       </div>
 
       <div className="p-4">
-        <h3 className="font-semibold text-warm-800 mb-2 line-clamp-1">{product.name}</h3>
+        <h3 className="font-semibold text-warm-800 mb-1 line-clamp-1">{product.name}</h3>
+        <p className="text-xs text-warm-400 mb-2 flex items-center gap-1">
+          <Users size={12} />
+          {supplierName}
+        </p>
         
         <div className="flex items-baseline gap-1 mb-3">
           <span className="text-xs text-warm-400">¥</span>
@@ -493,18 +610,27 @@ function ProductCard({
           <span className="text-xs text-warm-400 ml-2">成本¥{product.cost}</span>
         </div>
 
-        <div className="mb-3">
-          <div className="flex justify-between text-xs text-warm-500 mb-1">
-            <span>已售 {product.sold} / 库存 {product.stock}</span>
-            <span>{progress.toFixed(0)}%</span>
+        {product.isActive && (
+          <div className="mb-3">
+            <div className="flex justify-between text-xs text-warm-500 mb-1">
+              <span>已售 {product.sold} / 库存 {product.stock}</span>
+              <span>{progress.toFixed(0)}%</span>
+            </div>
+            <div className="h-2 bg-warm-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-primary-400 to-primary-500 rounded-full transition-all duration-500"
+                style={{ width: `${Math.min(progress, 100)}%` }}
+              />
+            </div>
           </div>
-          <div className="h-2 bg-warm-100 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-gradient-to-r from-primary-400 to-primary-500 rounded-full transition-all duration-500"
-              style={{ width: `${Math.min(progress, 100)}%` }}
-            />
+        )}
+
+        {!product.isActive && (
+          <div className="mb-3 py-2 px-3 bg-danger-50 rounded-lg flex items-center gap-2">
+            <XCircle size={14} className="text-danger-500" />
+            <span className="text-xs text-danger-600 font-medium">商品已下架，点击右上角按钮重新上架</span>
           </div>
-        </div>
+        )}
 
         <div className="flex gap-2">
           <button
