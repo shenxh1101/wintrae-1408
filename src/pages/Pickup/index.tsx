@@ -14,9 +14,12 @@ import {
   X,
   User,
   Sparkles,
+  Clipboard,
+  Download,
+  History,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
-import type { Order, Neighbor } from '../../types';
+import type { Order, PickupHistoryEntry } from '../../types';
 
 type ToastType = 'success' | 'error' | 'info';
 
@@ -26,6 +29,9 @@ interface Toast {
   message: string;
 }
 
+type TabType = 'scan' | 'manual' | 'pending' | 'handover';
+type HandoverListType = 'pending' | 'picked';
+
 export default function PickupPage() {
   const {
     currentDate,
@@ -33,15 +39,21 @@ export default function PickupPage() {
     getOrdersByDate,
     pickupOrder,
     pickupOrders,
-    getNeighborById,
+    getNeighborDisplayInfo,
+    getAllBuildings,
+    getHandoverReport,
+    getPickupHistoryByDate,
   } = useAppStore();
 
   const [scanInput, setScanInput] = useState('');
-  const [activeTab, setActiveTab] = useState<'scan' | 'manual' | 'pending'>('scan');
+  const [activeTab, setActiveTab] = useState<TabType>('scan');
   const [searchValue, setSearchValue] = useState('');
   const [foundOrder, setFoundOrder] = useState<Order | null>(null);
   const [expandedBuilding, setExpandedBuilding] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
+
+  const [selectedBuilding, setSelectedBuilding] = useState<string>('');
+  const [handoverListType, setHandoverListType] = useState<HandoverListType>('pending');
 
   const scanInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -50,17 +62,31 @@ export default function PickupPage() {
   const pendingOrders = getPendingPickupOrders(currentDate);
   const allOrders = getOrdersByDate(currentDate);
   const pickedOrders = allOrders.filter((o) => o.pickupStatus === 'picked');
+  const buildings = getAllBuildings();
+  const pickupHistory = getPickupHistoryByDate(currentDate);
+
+  const handoverReport = useMemo(() => {
+    if (!selectedBuilding) return null;
+    return getHandoverReport(currentDate, selectedBuilding);
+  }, [currentDate, selectedBuilding, getHandoverReport]);
 
   const pendingByBuilding = useMemo(() => {
     const groups: Record<string, Order[]> = {};
     pendingOrders.forEach((order) => {
-      if (!groups[order.building]) {
-        groups[order.building] = [];
+      const info = getNeighborDisplayInfo(order.neighborId);
+      if (!groups[info.building]) {
+        groups[info.building] = [];
       }
-      groups[order.building].push(order);
+      groups[info.building].push(order);
     });
     return groups;
-  }, [pendingOrders]);
+  }, [pendingOrders, getNeighborDisplayInfo]);
+
+  useEffect(() => {
+    if (buildings.length > 0 && !selectedBuilding) {
+      setSelectedBuilding(buildings[0]);
+    }
+  }, [buildings, selectedBuilding]);
 
   const showToast = (type: ToastType, message: string) => {
     const id = ++toastIdRef.current;
@@ -79,10 +105,14 @@ export default function PickupPage() {
     if (!trimmed) return;
 
     const order = allOrders.find(
-      (o) =>
-        o.orderNo.toLowerCase() === trimmed.toLowerCase() ||
-        o.phone.includes(trimmed) ||
-        o.phone.endsWith(trimmed)
+      (o) => {
+        const info = getNeighborDisplayInfo(o.neighborId);
+        return (
+          o.orderNo.toLowerCase() === trimmed.toLowerCase() ||
+          info.phone.includes(trimmed) ||
+          info.phone.endsWith(trimmed)
+        );
+      }
     );
 
     if (order) {
@@ -148,8 +178,74 @@ export default function PickupPage() {
     setExpandedBuilding(expandedBuilding === building ? null : building);
   };
 
-  const getNeighbor = (neighborId: string): Neighbor | undefined => {
-    return getNeighborById(neighborId);
+  const generateHandoverText = () => {
+    if (!handoverReport) return '';
+
+    const { date, building, pendingList, pickedList, pendingTotal, pickedTotal } = handoverReport;
+
+    let text = `【${building} 交接清单 - ${date}】\n\n`;
+
+    text += `未取（${pendingList.length}户）：\n`;
+    pendingList.forEach((item, index) => {
+      const itemsStr = item.items.map((i) => `${i.productName}×${i.quantity}`).join(', ');
+      const phone = item.neighborPhone;
+      const maskedPhone = phone.slice(0, 3) + '****' + phone.slice(-4);
+      text += `${index + 1}. ${item.neighborName} ${item.room}室 ${maskedPhone} - ${itemsStr} - ¥${item.total.toFixed(2)}\n`;
+    });
+    text += `\n未取总金额：¥${pendingTotal.toFixed(2)}\n\n`;
+
+    text += `已取（${pickedTotal}户）：\n`;
+    pickedList.forEach((item, index) => {
+      const itemsStr = item.items.map((i) => `${i.productName}×${i.quantity}`).join(', ');
+      text += `${index + 1}. ${item.neighborName} ${item.room}室 - ${itemsStr} - ${item.pickupTime}\n`;
+    });
+
+    return text;
+  };
+
+  const handleCopyToClipboard = async () => {
+    const text = generateHandoverText();
+    if (!text) {
+      showToast('error', '请先选择楼栋');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('success', '已复制到剪贴板');
+    } catch {
+      showToast('error', '复制失败，请手动复制');
+    }
+  };
+
+  const handleExport = () => {
+    const text = generateHandoverText();
+    if (!text) {
+      showToast('error', '请先选择楼栋');
+      return;
+    }
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${handoverReport?.building}_交接清单_${handoverReport?.date}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('success', '导出成功');
+  };
+
+  const getActionTypeLabel = (action: PickupHistoryEntry['action']) => {
+    switch (action) {
+      case 'pickup':
+        return '单笔';
+      case 'batch_pickup':
+        return '批量';
+      case 'cancel':
+        return '取消';
+      default:
+        return action;
+    }
   };
 
   useEffect(() => {
@@ -159,33 +255,25 @@ export default function PickupPage() {
   }, [activeTab]);
 
   const renderNeighborCard = (order: Order) => {
-    const neighbor = getNeighbor(order.neighborId);
+    const info = getNeighborDisplayInfo(order.neighborId);
     return (
       <div className="flex items-center gap-3 mb-4 p-3 bg-white rounded-xl">
         <div className="relative flex-shrink-0">
-          {neighbor?.avatar ? (
-            <img
-              src={neighbor.avatar}
-              alt={neighbor.name}
-              className="w-12 h-12 rounded-full object-cover border-2 border-primary-100"
-            />
-          ) : (
-            <div className="w-12 h-12 rounded-full bg-primary-100 flex items-center justify-center">
-              <User size={20} className="text-primary-500" />
-            </div>
-          )}
+          <div className="w-12 h-12 rounded-full bg-primary-100 flex items-center justify-center text-2xl">
+            {info.avatar || '👤'}
+          </div>
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="font-semibold text-warm-800">{neighbor?.name || '邻居'}</span>
+            <span className="font-semibold text-warm-800">{info.name || '邻居'}</span>
           </div>
           <div className="flex items-center gap-2 text-sm text-warm-500 mt-0.5">
             <Phone size={12} />
-            <span>{order.phone.slice(0, 3)}****{order.phone.slice(-4)}</span>
+            <span>{info.phone.slice(0, 3)}****{info.phone.slice(-4)}</span>
           </div>
-          {neighbor?.remark && (
+          {info.remark && (
             <p className="text-xs text-warm-400 mt-1 truncate">
-              <span className="text-warm-400">备注：</span>{neighbor.remark}
+              <span className="text-warm-400">备注：</span>{info.remark}
             </p>
           )}
         </div>
@@ -194,7 +282,7 @@ export default function PickupPage() {
   };
 
   const renderOrderDetail = (order: Order, showConfirmButton = true, isScanMode = false) => {
-    const neighbor = getNeighbor(order.neighborId);
+    const info = getNeighborDisplayInfo(order.neighborId);
     return (
       <div className="max-w-md mx-auto mt-6 p-5 bg-warm-50 rounded-2xl text-left animate-fade-in">
         {renderNeighborCard(order)}
@@ -207,7 +295,7 @@ export default function PickupPage() {
         <div className="space-y-2 mb-4 text-sm">
           <div className="flex items-center gap-2 text-warm-600">
             <Building2 size={14} />
-            <span>{order.building} {order.room}</span>
+            <span>{info.building} {info.room}</span>
           </div>
         </div>
         <div className="border-t border-warm-200 pt-3 mb-4">
@@ -313,13 +401,14 @@ export default function PickupPage() {
             { key: 'scan', label: '扫码核销', icon: ScanLine },
             { key: 'manual', label: '手动核销', icon: Search },
             { key: 'pending', label: '未取名单', icon: AlertCircle },
+            { key: 'handover', label: '交接模式', icon: Clipboard },
           ].map((tab) => {
             const Icon = tab.icon;
             return (
               <button
                 key={tab.key}
                 onClick={() => {
-                  setActiveTab(tab.key as typeof activeTab);
+                  setActiveTab(tab.key as TabType);
                   setFoundOrder(null);
                 }}
                 className={`flex-1 h-14 flex items-center justify-center gap-2 font-medium transition-colors relative ${
@@ -440,29 +529,19 @@ export default function PickupPage() {
                             本楼栋一键核销全部（{orders.length}单）
                           </button>
                           {orders.map((order) => {
-                            const neighbor = getNeighbor(order.neighborId);
+                            const info = getNeighborDisplayInfo(order.neighborId);
                             return (
                               <div
                                 key={order.id}
                                 className="flex items-center justify-between p-3 bg-white rounded-lg hover:bg-warm-50 transition-colors"
                               >
                                 <div className="flex items-center gap-3 flex-1 min-w-0">
-                                  <div className="flex-shrink-0">
-                                    {neighbor?.avatar ? (
-                                      <img
-                                        src={neighbor.avatar}
-                                        alt={neighbor.name}
-                                        className="w-10 h-10 rounded-full object-cover border-2 border-warm-100"
-                                      />
-                                    ) : (
-                                      <div className="w-10 h-10 rounded-full bg-primary-100 flex items-center justify-center">
-                                        <User size={16} className="text-primary-500" />
-                                      </div>
-                                    )}
+                                  <div className="flex-shrink-0 w-10 h-10 rounded-full bg-primary-100 flex items-center justify-center text-xl">
+                                    {info.avatar || '👤'}
                                   </div>
                                   <div className="flex-1 min-w-0">
                                     <p className="font-medium text-warm-800 text-sm">
-                                      {neighbor?.name || '邻居'} · {order.room}室
+                                      {info.name || '邻居'} · {info.room}室
                                     </p>
                                     <p className="text-xs text-warm-500 mt-0.5 truncate">
                                       {order.items.map((i) => i.productName).join('、')}
@@ -491,6 +570,158 @@ export default function PickupPage() {
               )}
             </div>
           )}
+
+          {/* 交接模式 */}
+          {activeTab === 'handover' && (
+            <div>
+              <div className="max-w-2xl mx-auto">
+                <h3 className="text-lg font-bold text-warm-800 mb-2 text-center">交接模式</h3>
+                <p className="text-sm text-warm-500 mb-6 text-center">按楼栋生成交接清单，便于与物业或志愿者交接</p>
+
+                {/* 楼栋选择 */}
+                <div className="mb-6">
+                  <label className="block text-sm font-medium text-warm-700 mb-2">选择楼栋</label>
+                  <div className="relative">
+                    <select
+                      value={selectedBuilding}
+                      onChange={(e) => setSelectedBuilding(e.target.value)}
+                      className="w-full h-12 px-4 pr-10 border border-warm-200 rounded-xl bg-white focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-50 appearance-none cursor-pointer"
+                    >
+                      {buildings.map((building) => (
+                        <option key={building} value={building}>
+                          {building}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-warm-400 pointer-events-none" />
+                  </div>
+                </div>
+
+                {handoverReport && (
+                  <>
+                    {/* 统计信息 */}
+                    <div className="grid grid-cols-2 gap-4 mb-6">
+                      <div className="bg-warning-50 rounded-xl p-4 text-center">
+                        <p className="text-sm text-warm-500 mb-1">未取户数</p>
+                        <p className="text-2xl font-bold text-warning-600">{handoverReport.pendingList.length} 户</p>
+                        <p className="text-sm text-warm-500 mt-1">¥{handoverReport.pendingTotal.toFixed(2)}</p>
+                      </div>
+                      <div className="bg-success-50 rounded-xl p-4 text-center">
+                        <p className="text-sm text-warm-500 mb-1">已取户数</p>
+                        <p className="text-2xl font-bold text-success-600">{handoverReport.pickedTotal} 户</p>
+                      </div>
+                    </div>
+
+                    {/* 清单切换 */}
+                    <div className="flex gap-2 mb-4">
+                      <button
+                        onClick={() => setHandoverListType('pending')}
+                        className={`flex-1 h-10 rounded-lg font-medium transition-colors ${
+                          handoverListType === 'pending'
+                            ? 'bg-warning-500 text-white'
+                            : 'bg-warm-100 text-warm-600 hover:bg-warm-200'
+                        }`}
+                      >
+                        未取清单
+                      </button>
+                      <button
+                        onClick={() => setHandoverListType('picked')}
+                        className={`flex-1 h-10 rounded-lg font-medium transition-colors ${
+                          handoverListType === 'picked'
+                            ? 'bg-success-500 text-white'
+                            : 'bg-warm-100 text-warm-600 hover:bg-warm-200'
+                        }`}
+                      >
+                        已取清单
+                      </button>
+                    </div>
+
+                    {/* 导出和复制按钮 */}
+                    <div className="flex gap-3 mb-4">
+                      <button
+                        onClick={handleExport}
+                        className="flex-1 h-10 rounded-lg bg-primary-50 text-primary-600 font-medium flex items-center justify-center gap-2 hover:bg-primary-100 transition-colors btn-press"
+                      >
+                        <Download size={16} />
+                        导出
+                      </button>
+                      <button
+                        onClick={handleCopyToClipboard}
+                        className="flex-1 h-10 rounded-lg bg-primary-500 text-white font-medium flex items-center justify-center gap-2 hover:bg-primary-600 transition-colors btn-press"
+                      >
+                        <Clipboard size={16} />
+                        复制
+                      </button>
+                    </div>
+
+                    {/* 未取清单 */}
+                    {handoverListType === 'pending' && (
+                      <div className="space-y-2 max-h-96 overflow-y-auto">
+                        {handoverReport.pendingList.length > 0 ? (
+                          handoverReport.pendingList.map((item, index) => (
+                            <div key={item.orderId} className="bg-white border border-warm-100 rounded-xl p-4">
+                              <div className="flex items-start justify-between mb-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="w-6 h-6 rounded-full bg-warning-100 text-warning-600 text-xs font-bold flex items-center justify-center">
+                                    {index + 1}
+                                  </span>
+                                  <span className="font-semibold text-warm-800">{item.neighborName}</span>
+                                  <span className="text-sm text-warm-500">{item.room}室</span>
+                                </div>
+                                <span className="font-bold text-primary-500">¥{item.total.toFixed(2)}</span>
+                              </div>
+                              <div className="flex items-center gap-2 text-sm text-warm-500 mb-2">
+                                <Phone size={12} />
+                                <span>{item.neighborPhone.slice(0, 3)}****{item.neighborPhone.slice(-4)}</span>
+                              </div>
+                              <div className="text-sm text-warm-600">
+                                {item.items.map((i) => `${i.productName}×${i.quantity}`).join('、')}
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="text-center py-8">
+                            <div className="text-4xl mb-3">✅</div>
+                            <p className="text-warm-500">该楼栋已全部取货</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* 已取清单 */}
+                    {handoverListType === 'picked' && (
+                      <div className="space-y-2 max-h-96 overflow-y-auto">
+                        {handoverReport.pickedList.length > 0 ? (
+                          handoverReport.pickedList.map((item, index) => (
+                            <div key={item.orderId} className="bg-white border border-warm-100 rounded-xl p-4">
+                              <div className="flex items-start justify-between mb-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="w-6 h-6 rounded-full bg-success-100 text-success-600 text-xs font-bold flex items-center justify-center">
+                                    {index + 1}
+                                  </span>
+                                  <span className="font-semibold text-warm-800">{item.neighborName}</span>
+                                  <span className="text-sm text-warm-500">{item.room}室</span>
+                                </div>
+                                <span className="text-sm text-warm-500">{item.pickupTime}</span>
+                              </div>
+                              <div className="text-sm text-warm-600">
+                                {item.items.map((i) => `${i.productName}×${i.quantity}`).join('、')}
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="text-center py-8">
+                            <div className="text-4xl mb-3">📦</div>
+                            <p className="text-warm-500">该楼栋暂无已取订单</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -503,30 +734,22 @@ export default function PickupPage() {
           </h3>
           <div className="space-y-2">
             {pickedOrders.slice(0, 5).map((order) => {
-              const neighbor = getNeighbor(order.neighborId);
+              const info = getNeighborDisplayInfo(order.neighborId);
               return (
                 <div
                   key={order.id}
                   className="flex items-center justify-between py-2 border-b border-warm-50 last:border-0"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-success-50 flex items-center justify-center overflow-hidden flex-shrink-0">
-                      {neighbor?.avatar ? (
-                        <img
-                          src={neighbor.avatar}
-                          alt={neighbor.name}
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        <Check size={14} className="text-success-500" />
-                      )}
+                    <div className="w-8 h-8 rounded-full bg-success-50 flex items-center justify-center overflow-hidden flex-shrink-0 text-lg">
+                      {info.avatar || <Check size={14} className="text-success-500" />}
                     </div>
                     <div>
                       <p className="text-sm font-medium text-warm-800">
-                        {neighbor?.name || order.orderNo}
+                        {info.name || order.orderNo}
                       </p>
                       <p className="text-xs text-warm-500">
-                        {order.building} {order.room}
+                        {info.building} {info.room}
                       </p>
                     </div>
                   </div>
@@ -537,6 +760,53 @@ export default function PickupPage() {
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* 核销操作记录 */}
+      {pickupHistory.length > 0 && (
+        <div className="bg-white rounded-2xl shadow-card p-5">
+          <h3 className="font-bold text-warm-800 mb-4 flex items-center gap-2">
+            <History size={18} className="text-primary-500" />
+            核销操作记录
+          </h3>
+          <div className="space-y-2">
+            {pickupHistory.map((entry) => (
+              <div
+                key={entry.id}
+                className="flex items-center justify-between py-2 border-b border-warm-50 last:border-0"
+              >
+                <div className="flex items-center gap-3">
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
+                    entry.action === 'pickup' ? 'bg-primary-50' :
+                    entry.action === 'batch_pickup' ? 'bg-success-50' : 'bg-danger-50'
+                  }`}>
+                    <History size={14} className={`${
+                      entry.action === 'pickup' ? 'text-primary-500' :
+                      entry.action === 'batch_pickup' ? 'text-success-500' : 'text-danger-500'
+                    }`} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-warm-800">
+                      {entry.operator}
+                      <span className={`ml-2 px-2 py-0.5 text-xs font-medium rounded-full ${
+                        entry.action === 'pickup' ? 'bg-primary-100 text-primary-600' :
+                        entry.action === 'batch_pickup' ? 'bg-success-100 text-success-600' : 'bg-danger-100 text-danger-600'
+                      }`}>
+                        {getActionTypeLabel(entry.action)}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm font-medium text-warm-700">
+                    {entry.orderIds?.length || 1} 单
+                  </p>
+                  <p className="text-xs text-warm-400">{entry.time}</p>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}

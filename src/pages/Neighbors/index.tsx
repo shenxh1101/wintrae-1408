@@ -738,6 +738,7 @@ function NeighborCard({
   neighbor,
   index,
   onClick,
+  onToggleBlacklist,
 }: {
   neighbor: Neighbor;
   index: number;
@@ -814,11 +815,30 @@ function NeighborCard({
           <button
             onClick={(e) => {
               e.stopPropagation();
+              onClick();
             }}
             className="flex-1 h-8 rounded-lg text-xs font-medium bg-warm-50 text-warm-500 hover:bg-primary-50 hover:text-primary-500 flex items-center justify-center gap-1 transition-colors"
           >
             <Edit2 size={12} />
             查看详情
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleBlacklist();
+            }}
+            className={`h-8 px-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-colors ${
+              neighbor.isBlacklisted
+                ? 'bg-success-50 text-success-600 hover:bg-success-100'
+                : 'bg-danger-50 text-danger-600 hover:bg-danger-100'
+            }`}
+            title={neighbor.isBlacklisted ? '移出黑名单' : '加入黑名单'}
+          >
+            {neighbor.isBlacklisted ? (
+              <CheckCircle size={12} />
+            ) : (
+              <Ban size={12} />
+            )}
           </button>
         </div>
       </div>

@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { format } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 import {
   DollarSign,
@@ -18,25 +18,42 @@ import {
   ShoppingCart,
   ArrowRight,
   MinusCircle,
+  Calendar,
+  ChevronDown,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
-import type { AfterSaleType, AfterSaleStatus } from '../../types';
+import type { AfterSaleType, AfterSaleStatus, AfterSaleItemBreakdown, OrderItem } from '../../types';
+
+interface SelectedItem {
+  itemId: string;
+  productId: string;
+  productName: string;
+  supplierId: string;
+  quantity: number;
+  price: number;
+  cost: number;
+  deductibleAmount: number;
+  selected: boolean;
+  amount: number;
+}
 
 export default function AfterSalePage() {
   const {
     currentDate,
     getDailySummary,
     getSupplierSettlement,
+    getDateRangeSummary,
     afterSales,
     orders,
     suppliers,
     addAfterSale,
+    addAfterSaleWithBreakdown,
     updateAfterSaleStatus,
     neighbors,
   } = useAppStore();
 
   const [showAddModal, setShowAddModal] = useState(false);
-  const [activeTab, setActiveTab] = useState<'list' | 'settlement'>('list');
+  const [activeTab, setActiveTab] = useState<'list' | 'settlement' | 'summary'>('list');
   const [formData, setFormData] = useState({
     type: 'out_of_stock' as AfterSaleType,
     orderId: '',
@@ -47,9 +64,21 @@ export default function AfterSalePage() {
     affectsSupplier: true,
   });
 
+  const [selectedItems, setSelectedItems] = useState<SelectedItem[]>([]);
+  const [dateRange, setDateRange] = useState({
+    startDate: currentDate,
+    endDate: currentDate,
+  });
+
   const summary = getDailySummary(currentDate);
   const supplierSettlement = getSupplierSettlement(currentDate);
-  
+  const dateRangeSummary = useMemo(() => {
+    if (activeTab === 'summary') {
+      return getDateRangeSummary(dateRange.startDate, dateRange.endDate);
+    }
+    return [];
+  }, [activeTab, dateRange.startDate, dateRange.endDate, getDateRangeSummary]);
+
   const dateDisplay = format(new Date(currentDate), 'M月d日 EEEE', { locale: zhCN });
 
   useEffect(() => {
@@ -72,9 +101,97 @@ export default function AfterSalePage() {
   const getNeighborById = (id: string) => neighbors.find((n) => n.id === id);
   const getSupplierById = (id: string) => suppliers.find((s) => s.id === id);
 
+  const handleOrderChange = (orderId: string) => {
+    const order = orders.find((o) => o.id === orderId);
+    if (order) {
+      const items: SelectedItem[] = order.items.map((item) => ({
+        itemId: item.id,
+        productId: item.productId,
+        productName: item.productName,
+        supplierId: item.supplierId,
+        quantity: item.quantity,
+        price: item.price,
+        cost: item.cost,
+        deductibleAmount: item.price * item.quantity,
+        selected: false,
+        amount: item.price * item.quantity,
+      }));
+      setSelectedItems(items);
+      setFormData({
+        ...formData,
+        orderId,
+        neighborId: order.neighborId,
+        amount: 0,
+      });
+    } else {
+      setSelectedItems([]);
+      setFormData({
+        ...formData,
+        orderId: '',
+        neighborId: '',
+        amount: 0,
+      });
+    }
+  };
+
+  const toggleItemSelection = (itemId: string) => {
+    setSelectedItems((prev) =>
+      prev.map((item) =>
+        item.itemId === itemId
+          ? { ...item, selected: !item.selected, amount: item.selected ? 0 : item.deductibleAmount }
+          : item
+      )
+    );
+  };
+
+  const updateItemAmount = (itemId: string, amount: number) => {
+    setSelectedItems((prev) =>
+      prev.map((item) => (item.itemId === itemId ? { ...item, amount } : item))
+    );
+  };
+
+  const totalAmount = useMemo(() => {
+    return selectedItems
+      .filter((item) => item.selected)
+      .reduce((sum, item) => sum + item.amount, 0);
+  }, [selectedItems]);
+
+  const groupedItems = useMemo(() => {
+    const groups = new Map<string, SelectedItem[]>();
+    selectedItems.forEach((item) => {
+      const existing = groups.get(item.supplierId) || [];
+      groups.set(item.supplierId, [...existing, item]);
+    });
+    return groups;
+  }, [selectedItems]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    addAfterSale(formData);
+
+    const itemBreakdown: AfterSaleItemBreakdown[] = selectedItems
+      .filter((item) => item.selected)
+      .map((item) => ({
+        itemId: item.itemId,
+        productId: item.productId,
+        productName: item.productName,
+        supplierId: item.supplierId,
+        quantity: item.quantity,
+        amount: item.amount,
+        cost: item.cost,
+      }));
+
+    if (itemBreakdown.length > 0) {
+      addAfterSaleWithBreakdown({
+        orderId: formData.orderId,
+        type: formData.type,
+        reason: formData.reason,
+        itemBreakdown,
+        affectsSupplier: formData.affectsSupplier,
+      });
+    } else {
+      addAfterSale(formData);
+    }
+
     setShowAddModal(false);
     setFormData({
       type: 'out_of_stock',
@@ -85,6 +202,7 @@ export default function AfterSalePage() {
       amount: 0,
       affectsSupplier: true,
     });
+    setSelectedItems([]);
   };
 
   const afterSaleTypes: { value: AfterSaleType; label: string; icon: React.ReactNode; color: string; badgeColor: string }[] = [
@@ -157,6 +275,27 @@ export default function AfterSalePage() {
     },
   ];
 
+  const dateRangeTotals = useMemo(() => {
+    return dateRangeSummary.reduce(
+      (acc, item) => ({
+        leaderIncome: acc.leaderIncome + item.leaderIncome,
+        supplierPayable: acc.supplierPayable + item.supplierPayable,
+        afterSaleDeduction: acc.afterSaleDeduction + item.afterSaleDeduction,
+        pendingRefund: acc.pendingRefund + item.pendingRefund,
+        totalOrders: acc.totalOrders + item.totalOrders,
+        totalOrderAmount: acc.totalOrderAmount + item.totalOrderAmount,
+      }),
+      {
+        leaderIncome: 0,
+        supplierPayable: 0,
+        afterSaleDeduction: 0,
+        pendingRefund: 0,
+        totalOrders: 0,
+        totalOrderAmount: 0,
+      }
+    );
+  }, [dateRangeSummary]);
+
   return (
     <div className="space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
@@ -210,6 +349,17 @@ export default function AfterSalePage() {
             <Users size={18} />
             <span>供应商对账</span>
           </button>
+          <button
+            onClick={() => setActiveTab('summary')}
+            className={`flex-1 h-14 flex items-center justify-center gap-2 font-medium transition-colors relative ${
+              activeTab === 'summary'
+                ? 'text-primary-600'
+                : 'text-warm-500 hover:text-warm-700'
+            }`}
+          >
+            <FileText size={18} />
+            <span>对账汇总</span>
+          </button>
         </div>
 
         <div className="p-5">
@@ -249,6 +399,11 @@ export default function AfterSalePage() {
                                 影响供应商扣款
                               </span>
                             )}
+                            {item.multiSupplier && (
+                              <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-secondary-100 text-secondary-600">
+                                多供应商分摊
+                              </span>
+                            )}
                           </div>
                           
                           <p className="text-sm text-warm-600 mb-2 line-clamp-1">{item.reason}</p>
@@ -273,6 +428,26 @@ export default function AfterSalePage() {
                               </span>
                             )}
                           </div>
+
+                          {item.itemBreakdown && item.itemBreakdown.length > 0 && (
+                            <div className="mt-3 pt-3 border-t border-warm-200/50">
+                              <p className="text-xs font-medium text-warm-600 mb-2">售后商品明细</p>
+                              <div className="space-y-1">
+                                {item.itemBreakdown.map((bd) => {
+                                  const sup = getSupplierById(bd.supplierId);
+                                  return (
+                                    <div key={bd.itemId} className="flex items-center justify-between text-xs bg-white px-2 py-1.5 rounded-lg">
+                                      <span className="text-warm-600">
+                                        {bd.productName} × {bd.quantity}
+                                        {sup && <span className="text-warm-400 ml-2">({sup.name})</span>}
+                                      </span>
+                                      <span className="font-medium text-danger-500">-¥{bd.amount.toFixed(2)}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
                         </div>
                         
                         <div className="text-right">
@@ -356,7 +531,7 @@ export default function AfterSalePage() {
                             const detailTypeCfg = afterSaleTypes.find((t) => t.value === detail.type);
                             return (
                               <div
-                                key={detail.afterSaleId}
+                                key={detail.afterSaleId + detail.amount}
                                 className="flex items-center justify-between p-2.5 bg-white rounded-lg border border-warm-100"
                               >
                                 <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -394,13 +569,118 @@ export default function AfterSalePage() {
               </div>
             </div>
           )}
+
+          {activeTab === 'summary' && (
+            <div>
+              <div className="flex flex-wrap items-center gap-4 mb-5 p-4 bg-warm-50 rounded-xl">
+                <div className="flex items-center gap-2">
+                  <Calendar size={18} className="text-primary-500" />
+                  <span className="text-sm font-medium text-warm-700">开始日期</span>
+                  <input
+                    type="date"
+                    value={dateRange.startDate}
+                    onChange={(e) => setDateRange((prev) => ({ ...prev, startDate: e.target.value }))}
+                    className="h-10 px-3 border border-warm-200 rounded-lg focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-50 bg-white text-sm"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <Calendar size={18} className="text-primary-500" />
+                  <span className="text-sm font-medium text-warm-700">结束日期</span>
+                  <input
+                    type="date"
+                    value={dateRange.endDate}
+                    onChange={(e) => setDateRange((prev) => ({ ...prev, endDate: e.target.value }))}
+                    className="h-10 px-3 border border-warm-200 rounded-lg focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-50 bg-white text-sm"
+                  />
+                </div>
+              </div>
+
+              {dateRangeSummary.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-warm-50 border-b border-warm-200">
+                        <th className="px-4 py-3 text-left font-medium text-warm-600">日期</th>
+                        <th className="px-4 py-3 text-right font-medium text-warm-600">团长收入</th>
+                        <th className="px-4 py-3 text-right font-medium text-warm-600">供应商应结</th>
+                        <th className="px-4 py-3 text-right font-medium text-warm-600">售后扣款</th>
+                        <th className="px-4 py-3 text-right font-medium text-warm-600">待退金额</th>
+                        <th className="px-4 py-3 text-right font-medium text-warm-600">订单数</th>
+                        <th className="px-4 py-3 text-right font-medium text-warm-600">订单金额</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {dateRangeSummary.map((item, index) => (
+                        <tr
+                          key={item.date}
+                          className="border-b border-warm-100 hover:bg-warm-50/50 transition-colors animate-slide-up"
+                          style={{ animationDelay: `${index * 30}ms` }}
+                        >
+                          <td className="px-4 py-3 text-warm-800">
+                            {format(parseISO(item.date), 'M月d日 EEEE', { locale: zhCN })}
+                          </td>
+                          <td className="px-4 py-3 text-right font-medium text-green-600 tabular-nums">
+                            ¥{item.leaderIncome.toFixed(2)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-secondary-600 tabular-nums">
+                            ¥{item.supplierPayable.toFixed(2)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-danger-500 tabular-nums">
+                            -¥{item.afterSaleDeduction.toFixed(2)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-orange-500 tabular-nums">
+                            ¥{item.pendingRefund.toFixed(2)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-warm-700 tabular-nums">
+                            {item.totalOrders}
+                          </td>
+                          <td className="px-4 py-3 text-right font-medium text-warm-800 tabular-nums">
+                            ¥{item.totalOrderAmount.toFixed(2)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-primary-50 font-medium">
+                        <td className="px-4 py-3 text-warm-800 font-bold">合计</td>
+                        <td className="px-4 py-3 text-right text-green-600 tabular-nums font-bold">
+                          ¥{dateRangeTotals.leaderIncome.toFixed(2)}
+                        </td>
+                        <td className="px-4 py-3 text-right text-secondary-600 tabular-nums font-bold">
+                          ¥{dateRangeTotals.supplierPayable.toFixed(2)}
+                        </td>
+                        <td className="px-4 py-3 text-right text-danger-500 tabular-nums font-bold">
+                          -¥{dateRangeTotals.afterSaleDeduction.toFixed(2)}
+                        </td>
+                        <td className="px-4 py-3 text-right text-orange-500 tabular-nums font-bold">
+                          ¥{dateRangeTotals.pendingRefund.toFixed(2)}
+                        </td>
+                        <td className="px-4 py-3 text-right text-warm-700 tabular-nums font-bold">
+                          {dateRangeTotals.totalOrders}
+                        </td>
+                        <td className="px-4 py-3 text-right text-warm-800 tabular-nums font-bold">
+                          ¥{dateRangeTotals.totalOrderAmount.toFixed(2)}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              ) : (
+                <div className="text-center py-12">
+                  <FileText size={48} className="mx-auto text-warm-300 mb-3" />
+                  <p className="text-warm-500">暂无对账数据</p>
+                  <p className="text-sm text-warm-400 mt-1">请选择日期范围查看</p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
       {showAddModal && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-white rounded-2xl shadow-card-lg w-full max-w-md animate-slide-up">
-            <div className="flex items-center justify-between p-5 border-b border-warm-100">
+          <div className="bg-white rounded-2xl shadow-card-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto animate-slide-up">
+            <div className="flex items-center justify-between p-5 border-b border-warm-100 sticky top-0 bg-white z-10">
               <h2 className="text-lg font-bold text-warm-800">登记售后</h2>
               <button
                 onClick={() => setShowAddModal(false)}
@@ -440,15 +720,7 @@ export default function AfterSalePage() {
                 </label>
                 <select
                   value={formData.orderId}
-                  onChange={(e) => {
-                    const order = orders.find((o) => o.id === e.target.value);
-                    setFormData({
-                      ...formData,
-                      orderId: e.target.value,
-                      neighborId: order?.neighborId || '',
-                      amount: order ? order.totalAmount : 0,
-                    });
-                  }}
+                  onChange={(e) => handleOrderChange(e.target.value)}
                   className="w-full h-10 px-3 border border-warm-200 rounded-xl focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-50 bg-white"
                 >
                   <option value="">请选择订单</option>
@@ -456,43 +728,141 @@ export default function AfterSalePage() {
                     .filter((o) => o.date === currentDate)
                     .map((order) => (
                       <option key={order.id} value={order.id}>
-                        {order.orderNo} - ¥{order.totalAmount}
+                        {order.orderNo} - ¥{order.totalAmount.toFixed(2)}
                       </option>
                     ))}
                 </select>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-warm-700 mb-1.5">
-                  涉及供应商
-                </label>
-                <select
-                  value={formData.supplierId}
-                  onChange={(e) => setFormData({ ...formData, supplierId: e.target.value })}
-                  className="w-full h-10 px-3 border border-warm-200 rounded-xl focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-50 bg-white"
-                >
-                  <option value="">请选择供应商</option>
-                  {suppliers.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {selectedItems.length > 0 && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-medium text-warm-700">选择售后商品</label>
+                    <span className="text-xs text-warm-500">勾选需要登记售后的商品</span>
+                  </div>
 
-              <div>
-                <label className="block text-sm font-medium text-warm-700 mb-1.5">
-                  售后金额 (元)
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={formData.amount}
-                  onChange={(e) => setFormData({ ...formData, amount: Number(e.target.value) })}
-                  className="w-full h-10 px-3 border border-warm-200 rounded-xl focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-50"
-                  required
-                />
-              </div>
+                  {Array.from(groupedItems.entries()).map(([supplierId, items], groupIndex) => {
+                    const supplier = getSupplierById(supplierId);
+                    const groupTotal = items
+                      .filter((i) => i.selected)
+                      .reduce((sum, i) => sum + i.amount, 0);
+
+                    return (
+                      <div
+                        key={supplierId}
+                        className="border border-warm-200 rounded-xl overflow-hidden animate-slide-up"
+                        style={{ animationDelay: `${groupIndex * 50}ms` }}
+                      >
+                        <div className="bg-secondary-50 px-4 py-2.5 flex items-center justify-between border-b border-warm-200">
+                          <div className="flex items-center gap-2">
+                            <Truck size={16} className="text-secondary-500" />
+                            <span className="font-medium text-warm-800">{supplier?.name || '未知供应商'}</span>
+                            {items.length > 1 && (
+                              <span className="text-xs text-warm-500">共 {items.length} 件商品</span>
+                            )}
+                          </div>
+                          {groupTotal > 0 && (
+                            <span className="text-sm font-medium text-danger-500">-¥{groupTotal.toFixed(2)}</span>
+                          )}
+                        </div>
+
+                        <div className="divide-y divide-warm-100">
+                          {items.map((item) => (
+                            <div
+                              key={item.itemId}
+                              className={`px-4 py-3 flex items-center gap-3 transition-colors ${
+                                item.selected ? 'bg-primary-50/50' : 'hover:bg-warm-50'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={item.selected}
+                                onChange={() => toggleItemSelection(item.itemId)}
+                                className="w-5 h-5 rounded border-warm-300 text-primary-500 focus:ring-primary-400 cursor-pointer"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-warm-800 truncate">{item.productName}</p>
+                                <div className="flex items-center gap-3 mt-1 text-xs text-warm-500">
+                                  <span>单价: ¥{item.price.toFixed(2)}</span>
+                                  <span>数量: ×{item.quantity}</span>
+                                  <span>可扣: ¥{item.deductibleAmount.toFixed(2)}</span>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span className="text-xs text-warm-500">售后金额</span>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  max={item.deductibleAmount}
+                                  value={item.amount}
+                                  onChange={(e) => updateItemAmount(item.itemId, Number(e.target.value))}
+                                  disabled={!item.selected}
+                                  className="w-24 h-8 px-2 text-right text-sm border border-warm-200 rounded-lg focus:outline-none focus:border-primary-400 focus:ring-1 focus:ring-primary-50 disabled:bg-warm-100 disabled:text-warm-400 tabular-nums"
+                                />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  <div className="flex items-center justify-between p-4 bg-gradient-to-r from-warm-50 to-orange-50 rounded-xl border border-orange-200">
+                    <div>
+                      <p className="text-sm text-warm-600">已选商品售后总金额</p>
+                      <p className="text-xs text-warm-500 mt-0.5">
+                        {selectedItems.filter((i) => i.selected).length} 件商品
+                      </p>
+                    </div>
+                    <p className="text-2xl font-bold text-danger-500 tabular-nums">
+                      -¥{totalAmount.toFixed(2)}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {selectedItems.length === 0 && formData.orderId && (
+                <div className="p-4 bg-warm-50 rounded-xl text-center text-warm-500 text-sm">
+                  该订单暂无商品信息
+                </div>
+              )}
+
+              {selectedItems.length === 0 && (
+                <div>
+                  <label className="block text-sm font-medium text-warm-700 mb-1.5">
+                    涉及供应商
+                  </label>
+                  <select
+                    value={formData.supplierId}
+                    onChange={(e) => setFormData({ ...formData, supplierId: e.target.value })}
+                    className="w-full h-10 px-3 border border-warm-200 rounded-xl focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-50 bg-white"
+                  >
+                    <option value="">请选择供应商</option>
+                    {suppliers.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {selectedItems.length === 0 && (
+                <div>
+                  <label className="block text-sm font-medium text-warm-700 mb-1.5">
+                    售后金额 (元)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={formData.amount}
+                    onChange={(e) => setFormData({ ...formData, amount: Number(e.target.value) })}
+                    className="w-full h-10 px-3 border border-warm-200 rounded-xl focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-50"
+                    required
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-warm-700 mb-1.5">
@@ -532,14 +902,18 @@ export default function AfterSalePage() {
               <div className="flex gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowAddModal(false)}
+                  onClick={() => {
+                    setShowAddModal(false);
+                    setSelectedItems([]);
+                  }}
                   className="flex-1 h-11 rounded-xl border border-warm-200 text-warm-600 font-medium hover:bg-warm-50 transition-colors btn-press"
                 >
                   取消
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 h-11 rounded-xl bg-gradient-to-r from-primary-500 to-primary-600 text-white font-medium hover:from-primary-600 hover:to-primary-700 transition-all btn-press"
+                  disabled={selectedItems.length > 0 && totalAmount <= 0}
+                  className="flex-1 h-11 rounded-xl bg-gradient-to-r from-primary-500 to-primary-600 text-white font-medium hover:from-primary-600 hover:to-primary-700 transition-all btn-press disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   确认登记
                 </button>

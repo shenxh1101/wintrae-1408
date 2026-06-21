@@ -1,4 +1,4 @@
-import type { Product, Order, Neighbor, AfterSale, Supplier } from '../types';
+import type { Product, Order, Neighbor, AfterSale, Supplier, OrderItem } from '../types';
 import { format, addDays } from 'date-fns';
 
 const today = format(new Date(), 'yyyy-MM-dd');
@@ -12,54 +12,65 @@ export const mockSuppliers: Supplier[] = [
   { id: 'sup-004', name: '烘焙工坊', contact: '陈师傅', phone: '13800138004' },
 ];
 
+const productData: { [key: string]: Partial<Product> } = {
+  'prod-001': { supplierId: 'sup-001', cost: 18 },
+  'prod-002': { supplierId: 'sup-002', cost: 25 },
+  'prod-003': { supplierId: 'sup-003', cost: 32 },
+  'prod-004': { supplierId: 'sup-004', cost: 10 },
+  'prod-005': { supplierId: 'sup-001', cost: 8 },
+  'prod-006': { supplierId: 'sup-002', cost: 22 },
+  'prod-007': { supplierId: 'sup-001', cost: 65 },
+  'prod-008': { supplierId: 'sup-003', cost: 42 },
+};
+
 export const mockProducts: Product[] = [
   {
     id: 'prod-001', name: '烟台红富士苹果', image: '🍎', price: 29.9, cost: 18,
-    limitPerPerson: 5, stock: 100, sold: 68, category: '水果',
+    limitPerPerson: 5, stock: 100, stockAvailable: 32, sold: 68, category: '水果',
     date: today, cutoffTime: '18:00', pickupPoint: '小区东门自提点',
-    supplierId: 'sup-001', isActive: true,
+    supplierId: 'sup-001', isActive: true, isSoldOut: false,
   },
   {
     id: 'prod-002', name: '有机蔬菜套餐', image: '🥬', price: 39.9, cost: 25,
-    limitPerPerson: 2, stock: 50, sold: 42, category: '蔬菜',
+    limitPerPerson: 2, stock: 50, stockAvailable: 8, sold: 42, category: '蔬菜',
     date: today, cutoffTime: '18:00', pickupPoint: '小区东门自提点',
-    supplierId: 'sup-002', isActive: true,
+    supplierId: 'sup-002', isActive: true, isSoldOut: false,
   },
   {
     id: 'prod-003', name: '东海带鱼段', image: '🐟', price: 45, cost: 32,
-    limitPerPerson: 3, stock: 30, sold: 25, category: '海鲜',
+    limitPerPerson: 3, stock: 30, stockAvailable: 5, sold: 25, category: '海鲜',
     date: today, cutoffTime: '16:00', pickupPoint: '小区东门自提点',
-    supplierId: 'sup-003', isActive: true,
+    supplierId: 'sup-003', isActive: true, isSoldOut: false,
   },
   {
     id: 'prod-004', name: '手工吐司面包', image: '🍞', price: 18.8, cost: 10,
-    limitPerPerson: 2, stock: 40, sold: 35, category: '烘焙',
+    limitPerPerson: 2, stock: 40, stockAvailable: 0, sold: 40, category: '烘焙',
     date: today, cutoffTime: '20:00', pickupPoint: '小区便利店',
-    supplierId: 'sup-004', isActive: true,
+    supplierId: 'sup-004', isActive: true, isSoldOut: true,
   },
   {
     id: 'prod-005', name: '海南香蕉', image: '🍌', price: 15.9, cost: 8,
-    limitPerPerson: 3, stock: 80, sold: 55, category: '水果',
+    limitPerPerson: 3, stock: 80, stockAvailable: 25, sold: 55, category: '水果',
     date: today, cutoffTime: '18:00', pickupPoint: '小区东门自提点',
-    supplierId: 'sup-001', isActive: true,
+    supplierId: 'sup-001', isActive: true, isSoldOut: false,
   },
   {
     id: 'prod-006', name: '土鸡蛋(30枚)', image: '🥚', price: 35, cost: 22,
-    limitPerPerson: 2, stock: 60, sold: 48, category: '蛋类',
+    limitPerPerson: 2, stock: 60, stockAvailable: 0, sold: 60, category: '蛋类',
     date: today, cutoffTime: '18:00', pickupPoint: '小区东门自提点',
-    supplierId: 'sup-002', isActive: true,
+    supplierId: 'sup-002', isActive: true, isSoldOut: true,
   },
   {
     id: 'prod-007', name: '智利车厘子', image: '🍒', price: 89.9, cost: 65,
-    limitPerPerson: 1, stock: 20, sold: 0, category: '水果',
+    limitPerPerson: 1, stock: 20, stockAvailable: 20, sold: 0, category: '水果',
     date: tomorrow, cutoffTime: '12:00', pickupPoint: '小区东门自提点',
-    supplierId: 'sup-001', isActive: true,
+    supplierId: 'sup-001', isActive: true, isSoldOut: false,
   },
   {
     id: 'prod-008', name: '鲜虾', image: '🦐', price: 58, cost: 42,
-    limitPerPerson: 2, stock: 25, sold: 0, category: '海鲜',
+    limitPerPerson: 2, stock: 25, stockAvailable: 25, sold: 0, category: '海鲜',
     date: tomorrow, cutoffTime: '16:00', pickupPoint: '小区东门自提点',
-    supplierId: 'sup-003', isActive: true,
+    supplierId: 'sup-003', isActive: false, isSoldOut: false,
   },
 ];
 
@@ -118,62 +129,84 @@ function calcTotal(items: { price: number; quantity: number }[]) {
   return items.reduce((sum, it) => sum + it.price * it.quantity, 0);
 }
 
+function buildItem(id: string, productId: string, productName: string, price: number, quantity: number): OrderItem {
+  const prodInfo = productData[productId] || { cost: 0, supplierId: 'sup-001' };
+  return {
+    id,
+    productId,
+    productName,
+    price,
+    cost: prodInfo.cost as number,
+    quantity,
+    subtotal: price * quantity,
+    supplierId: prodInfo.supplierId as string,
+  };
+}
+
 export const mockOrders: Order[] = [
   {
     id: 'ord-001', neighborId: 'nei-001', orderNo: 'TG20240622001',
-    date: today, building: '1号楼', room: '1502', phone: '13812345678',
+    date: today,
     totalAmount: calcTotal([
       { price: 29.9, quantity: 2 },
       { price: 39.9, quantity: 1 },
     ]),
     payStatus: 'paid', pickupStatus: 'picked', pickupTime: '09:30',
     items: [
-      { id: 'item-001', productId: 'prod-001', productName: '烟台红富士苹果', price: 29.9, quantity: 2, subtotal: 29.9 * 2 },
-      { id: 'item-002', productId: 'prod-002', productName: '有机蔬菜套餐', price: 39.9, quantity: 1, subtotal: 39.9 * 1 },
+      buildItem('item-001', 'prod-001', '烟台红富士苹果', 29.9, 2),
+      buildItem('item-002', 'prod-002', '有机蔬菜套餐', 39.9, 1),
     ],
     remark: '放门口即可', createdAt: yesterday + 'T08:00:00',
+    pickupHistory: [
+      { id: 'ph-001', operator: '团长', time: '09:30', action: 'pickup', orderIds: ['ord-001'] },
+    ],
   },
   {
     id: 'ord-002', neighborId: 'nei-002', orderNo: 'TG20240622002',
-    date: today, building: '2号楼', room: '803', phone: '13987654321',
+    date: today,
     totalAmount: calcTotal([
       { price: 45, quantity: 1 },
       { price: 29.9, quantity: 1 },
     ]),
     payStatus: 'paid', pickupStatus: 'pending',
     items: [
-      { id: 'item-003', productId: 'prod-003', productName: '东海带鱼段', price: 45, quantity: 1, subtotal: 45 * 1 },
-      { id: 'item-004', productId: 'prod-001', productName: '烟台红富士苹果', price: 29.9, quantity: 1, subtotal: 29.9 * 1 },
+      buildItem('item-003', 'prod-003', '东海带鱼段', 45, 1),
+      buildItem('item-004', 'prod-001', '烟台红富士苹果', 29.9, 1),
     ],
     createdAt: yesterday + 'T09:15:00',
+    pickupHistory: [],
   },
   {
     id: 'ord-003', neighborId: 'nei-003', orderNo: 'TG20240622003',
-    date: today, building: '1号楼', room: '501', phone: '13611112222',
+    date: today,
     totalAmount: calcTotal([
       { price: 39.9, quantity: 1 },
       { price: 35, quantity: 1 },
     ]),
     payStatus: 'paid', pickupStatus: 'pending',
     items: [
-      { id: 'item-005', productId: 'prod-002', productName: '有机蔬菜套餐', price: 39.9, quantity: 1, subtotal: 39.9 * 1 },
-      { id: 'item-006', productId: 'prod-006', productName: '土鸡蛋(30枚)', price: 35, quantity: 1, subtotal: 35 * 1 },
+      buildItem('item-005', 'prod-002', '有机蔬菜套餐', 39.9, 1),
+      buildItem('item-006', 'prod-006', '土鸡蛋(30枚)', 35, 1),
     ],
     remark: '麻烦送到501，老人在家', createdAt: yesterday + 'T10:30:00',
+    pickupHistory: [],
   },
   {
     id: 'ord-004', neighborId: 'nei-004', orderNo: 'TG20240622004',
-    date: today, building: '3号楼', room: '1205', phone: '13733334444',
+    date: today,
     totalAmount: calcTotal([{ price: 18.8, quantity: 2 }]),
     payStatus: 'paid', pickupStatus: 'picked', pickupTime: '10:00',
     items: [
-      { id: 'item-007', productId: 'prod-004', productName: '手工吐司面包', price: 18.8, quantity: 2, subtotal: 18.8 * 2 },
+      buildItem('item-007', 'prod-004', '手工吐司面包', 18.8, 2),
     ],
     createdAt: yesterday + 'T11:00:00',
+    pickupHistory: [
+      { id: 'ph-002', operator: '团长', time: '10:00', action: 'pickup', orderIds: ['ord-004'] },
+    ],
   },
   {
     id: 'ord-005', neighborId: 'nei-005', orderNo: 'TG20240622005',
-    date: today, building: '2号楼', room: '2201', phone: '13855556666',
+    date: today,
     totalAmount: calcTotal([
       { price: 45, quantity: 1 },
       { price: 39.9, quantity: 1 },
@@ -181,15 +214,16 @@ export const mockOrders: Order[] = [
     ]),
     payStatus: 'unpaid', pickupStatus: 'pending',
     items: [
-      { id: 'item-008', productId: 'prod-003', productName: '东海带鱼段', price: 45, quantity: 1, subtotal: 45 * 1 },
-      { id: 'item-009', productId: 'prod-002', productName: '有机蔬菜套餐', price: 39.9, quantity: 1, subtotal: 39.9 * 1 },
-      { id: 'item-010', productId: 'prod-005', productName: '海南香蕉', price: 15.9, quantity: 1, subtotal: 15.9 * 1 },
+      buildItem('item-008', 'prod-003', '东海带鱼段', 45, 1),
+      buildItem('item-009', 'prod-002', '有机蔬菜套餐', 39.9, 1),
+      buildItem('item-010', 'prod-005', '海南香蕉', 15.9, 1),
     ],
     createdAt: yesterday + 'T14:20:00',
+    pickupHistory: [],
   },
   {
     id: 'ord-006', neighborId: 'nei-006', orderNo: 'TG20240622006',
-    date: today, building: '4号楼', room: '702', phone: '13977778888',
+    date: today,
     totalAmount: calcTotal([
       { price: 15.9, quantity: 1 },
       { price: 18.8, quantity: 1 },
@@ -197,25 +231,27 @@ export const mockOrders: Order[] = [
     ]),
     payStatus: 'paid', pickupStatus: 'pending',
     items: [
-      { id: 'item-011', productId: 'prod-005', productName: '海南香蕉', price: 15.9, quantity: 1, subtotal: 15.9 * 1 },
-      { id: 'item-012', productId: 'prod-004', productName: '手工吐司面包', price: 18.8, quantity: 1, subtotal: 18.8 * 1 },
-      { id: 'item-013', productId: 'prod-001', productName: '烟台红富士苹果', price: 29.9, quantity: 1, subtotal: 29.9 * 1 },
+      buildItem('item-011', 'prod-005', '海南香蕉', 15.9, 1),
+      buildItem('item-012', 'prod-004', '手工吐司面包', 18.8, 1),
+      buildItem('item-013', 'prod-001', '烟台红富士苹果', 29.9, 1),
     ],
     createdAt: yesterday + 'T16:45:00',
+    pickupHistory: [],
   },
   {
     id: 'ord-007', neighborId: 'nei-008', orderNo: 'TG20240622007',
-    date: today, building: '3号楼', room: '1806', phone: '13722223333',
+    date: today,
     totalAmount: calcTotal([
       { price: 29.9, quantity: 1 },
       { price: 45, quantity: 1 },
     ]),
     payStatus: 'paid', pickupStatus: 'pending',
     items: [
-      { id: 'item-014', productId: 'prod-001', productName: '烟台红富士苹果', price: 29.9, quantity: 1, subtotal: 29.9 * 1 },
-      { id: 'item-015', productId: 'prod-003', productName: '东海带鱼段', price: 45, quantity: 1, subtotal: 45 * 1 },
+      buildItem('item-014', 'prod-001', '烟台红富士苹果', 29.9, 1),
+      buildItem('item-015', 'prod-003', '东海带鱼段', 45, 1),
     ],
     remark: '下午六点左右取货', createdAt: yesterday + 'T17:30:00',
+    pickupHistory: [],
   },
 ];
 
@@ -224,15 +260,30 @@ export const mockAfterSales: AfterSale[] = [
     id: 'as-001', orderId: 'ord-001', neighborId: 'nei-001', supplierId: 'sup-001',
     type: 'damaged', reason: '苹果有两个碰伤', amount: 10, affectsSupplier: true,
     status: 'processed', createdAt: today + 'T09:45:00',
+    itemBreakdown: [
+      { itemId: 'item-001', productId: 'prod-001', productName: '烟台红富士苹果', supplierId: 'sup-001', quantity: 2, amount: 10, cost: 18 },
+    ],
+    multiSupplier: false,
+    supplierBreakdown: [{ supplierId: 'sup-001', amount: 10 }],
   },
   {
     id: 'as-002', orderId: 'ord-002', neighborId: 'nei-002', supplierId: 'sup-003',
     type: 'out_of_stock', reason: '带鱼段缺货，下次补发', amount: 45, affectsSupplier: true,
     status: 'pending', createdAt: today + 'T10:20:00',
+    itemBreakdown: [
+      { itemId: 'item-003', productId: 'prod-003', productName: '东海带鱼段', supplierId: 'sup-003', quantity: 1, amount: 45, cost: 32 },
+    ],
+    multiSupplier: false,
+    supplierBreakdown: [{ supplierId: 'sup-003', amount: 45 }],
   },
   {
     id: 'as-003', orderId: 'ord-004', neighborId: 'nei-004', supplierId: 'sup-004',
     type: 'refund', reason: '面包口感不好，退款处理', amount: 18.8, affectsSupplier: true,
     status: 'processed', createdAt: today + 'T11:00:00',
+    itemBreakdown: [
+      { itemId: 'item-007', productId: 'prod-004', productName: '手工吐司面包', supplierId: 'sup-004', quantity: 1, amount: 18.8, cost: 10 },
+    ],
+    multiSupplier: false,
+    supplierBreakdown: [{ supplierId: 'sup-004', amount: 18.8 }],
   },
 ];

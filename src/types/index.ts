@@ -3,6 +3,14 @@ export type PickupStatus = 'pending' | 'picked' | 'partial';
 export type AfterSaleType = 'out_of_stock' | 'damaged' | 'refund' | 'reissue';
 export type AfterSaleStatus = 'pending' | 'processed' | 'closed';
 
+export interface PickupHistoryEntry {
+  id: string;
+  operator: string;
+  time: string;
+  action: 'pickup' | 'batch_pickup' | 'cancel';
+  orderIds?: string[];
+}
+
 export interface Product {
   id: string;
   name: string;
@@ -11,6 +19,7 @@ export interface Product {
   cost: number;
   limitPerPerson: number;
   stock: number;
+  stockAvailable: number;
   sold: number;
   category: string;
   date: string;
@@ -18,6 +27,7 @@ export interface Product {
   pickupPoint: string;
   supplierId: string;
   isActive: boolean;
+  isSoldOut: boolean;
 }
 
 export interface OrderItem {
@@ -25,8 +35,10 @@ export interface OrderItem {
   productId: string;
   productName: string;
   price: number;
+  cost: number;
   quantity: number;
   subtotal: number;
+  supplierId: string;
 }
 
 export interface Order {
@@ -34,9 +46,6 @@ export interface Order {
   neighborId: string;
   orderNo: string;
   date: string;
-  building: string;
-  room: string;
-  phone: string;
   totalAmount: number;
   payStatus: PayStatus;
   pickupStatus: PickupStatus;
@@ -44,6 +53,7 @@ export interface Order {
   items: OrderItem[];
   remark?: string;
   createdAt: string;
+  pickupHistory: PickupHistoryEntry[];
 }
 
 export interface Neighbor {
@@ -60,6 +70,16 @@ export interface Neighbor {
   createdAt: string;
 }
 
+export interface AfterSaleItemBreakdown {
+  itemId: string;
+  productId: string;
+  productName: string;
+  supplierId: string;
+  quantity: number;
+  amount: number;
+  cost: number;
+}
+
 export interface AfterSale {
   id: string;
   orderId: string;
@@ -71,6 +91,9 @@ export interface AfterSale {
   affectsSupplier: boolean;
   status: AfterSaleStatus;
   createdAt: string;
+  itemBreakdown: AfterSaleItemBreakdown[];
+  multiSupplier: boolean;
+  supplierBreakdown: { supplierId: string; amount: number }[];
 }
 
 export interface Supplier {
@@ -94,4 +117,38 @@ export interface SupplierSettlement {
   totalRefund: number;
   settlementAmount: number;
   deductionDetails: { afterSaleId: string; type: AfterSaleType; amount: number; reason: string }[];
+}
+
+export interface DateRangeSummary {
+  date: string;
+  leaderIncome: number;
+  supplierPayable: number;
+  afterSaleDeduction: number;
+  pendingRefund: number;
+  totalOrders: number;
+  totalOrderAmount: number;
+}
+
+export interface HandoverReport {
+  date: string;
+  building: string;
+  pendingList: {
+    orderId: string;
+    orderNo: string;
+    neighborName: string;
+    neighborPhone: string;
+    room: string;
+    items: { productName: string; quantity: number }[];
+    total: number;
+  }[];
+  pickedList: {
+    orderId: string;
+    orderNo: string;
+    neighborName: string;
+    room: string;
+    pickupTime: string;
+    items: { productName: string; quantity: number }[];
+  }[];
+  pendingTotal: number;
+  pickedTotal: number;
 }

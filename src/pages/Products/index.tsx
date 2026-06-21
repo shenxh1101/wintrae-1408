@@ -20,6 +20,7 @@ import {
   Filter,
   Users,
   BarChart3,
+  RefreshCw,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import type { Product } from '../../types';
@@ -31,15 +32,20 @@ export default function ProductsPage() {
     getProductsByDate,
     getDailySummary,
     getActiveProductsByDate,
+    getOrdersByDate,
     addProduct,
     updateProduct,
     deleteProduct,
     toggleProductActive,
+    restockProduct,
     suppliers,
   } = useAppStore();
 
   const [showModal, setShowModal] = useState(false);
+  const [showRestockModal, setShowRestockModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [restockingProduct, setRestockingProduct] = useState<Product | null>(null);
+  const [restockQuantity, setRestockQuantity] = useState(1);
   const [selectedPickupPoint, setSelectedPickupPoint] = useState<string>('all');
   const [selectedSupplier, setSelectedSupplier] = useState<string>('all');
   const [formData, setFormData] = useState({
@@ -59,6 +65,7 @@ export default function ProductsPage() {
   const allProducts = getProductsByDate(currentDate);
   const activeProducts = getActiveProductsByDate(currentDate);
   const summary = getDailySummary(currentDate);
+  const dayOrders = getOrdersByDate(currentDate);
 
   const pickupPoints = useMemo(() => {
     const points = new Set(allProducts.map((p) => p.pickupPoint));
@@ -74,8 +81,21 @@ export default function ProductsPage() {
   }, [allProducts, selectedPickupPoint, selectedSupplier]);
 
   const totalSoldPieces = useMemo(() => {
-    return activeProducts.reduce((sum, p) => sum + p.sold, 0);
+    return activeProducts.reduce((sum, p) => sum + (p.stock - p.stockAvailable), 0);
   }, [activeProducts]);
+
+  const activeReceivable = useMemo(() => {
+    const activeProductIds = new Set(activeProducts.map((p) => p.id));
+    return dayOrders.reduce((sum, order) => {
+      const orderActiveAmount = order.items.reduce((orderSum, item) => {
+        if (activeProductIds.has(item.productId)) {
+          return orderSum + item.price * item.quantity;
+        }
+        return orderSum;
+      }, 0);
+      return sum + orderActiveAmount;
+    }, 0);
+  }, [dayOrders, activeProducts]);
 
   const goPrevDay = () => setCurrentDate(format(subDays(new Date(currentDate), 1), 'yyyy-MM-dd'));
   const goNextDay = () => setCurrentDate(format(addDays(new Date(currentDate), 1), 'yyyy-MM-dd'));
@@ -115,6 +135,21 @@ export default function ProductsPage() {
       isActive: product.isActive,
     });
     setShowModal(true);
+  };
+
+  const openRestockModal = (product: Product) => {
+    setRestockingProduct(product);
+    setRestockQuantity(1);
+    setShowRestockModal(true);
+  };
+
+  const handleRestock = () => {
+    if (!restockingProduct || restockQuantity <= 0) return;
+    const result = restockProduct(restockingProduct.id, restockQuantity);
+    if (result.success) {
+      setShowRestockModal(false);
+      setRestockingProduct(null);
+    }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -225,7 +260,7 @@ export default function ProductsPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <StatCard
           icon={<Package className="text-primary-500" />}
           label="总商品数"
@@ -239,6 +274,13 @@ export default function ProductsPage() {
           value={summary.activeProducts}
           unit="件"
           bgColor="bg-success-50"
+        />
+        <StatCard
+          icon={<XCircle className="text-danger-500" />}
+          label="售罄商品"
+          value={summary.soldOutProducts}
+          unit="件"
+          bgColor="bg-danger-50"
         />
         <StatCard
           icon={<BarChart3 className="text-secondary-500" />}
@@ -257,7 +299,7 @@ export default function ProductsPage() {
         <StatCard
           icon={<DollarSign className="text-success-600" />}
           label="销售金额"
-          value={summary.totalReceivable.toFixed(2)}
+          value={activeReceivable.toFixed(2)}
           unit="元"
           bgColor="bg-success-50"
         />
@@ -289,6 +331,7 @@ export default function ProductsPage() {
               onEdit={() => openEditModal(product)}
               onDelete={() => handleDelete(product.id)}
               onToggleActive={() => toggleProductActive(product.id)}
+              onRestock={() => openRestockModal(product)}
               supplierName={getSupplierName(product.supplierId)}
             />
           ))}
@@ -500,6 +543,71 @@ export default function ProductsPage() {
           </div>
         </div>
       )}
+
+      {showRestockModal && restockingProduct && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-card-lg w-full max-w-sm animate-slide-up">
+            <div className="flex items-center justify-between p-5 border-b border-warm-100">
+              <h2 className="text-lg font-bold text-warm-800">补货</h2>
+              <button
+                onClick={() => {
+                  setShowRestockModal(false);
+                  setRestockingProduct(null);
+                }}
+                className="w-8 h-8 rounded-full hover:bg-warm-50 flex items-center justify-center text-warm-400 hover:text-warm-600 transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="flex items-center gap-3 p-3 bg-warm-50 rounded-xl">
+                <span className="text-3xl">{restockingProduct.image}</span>
+                <div>
+                  <p className="font-medium text-warm-800">{restockingProduct.name}</p>
+                  <p className="text-sm text-warm-500">当前库存：{restockingProduct.stock} 件</p>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-warm-700 mb-1.5">
+                  补货数量
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  value={restockQuantity}
+                  onChange={(e) => setRestockQuantity(Math.max(1, Number(e.target.value)))}
+                  className="w-full h-10 px-3 border border-warm-200 rounded-xl focus:outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
+                  placeholder="请输入补货数量"
+                  required
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowRestockModal(false);
+                    setRestockingProduct(null);
+                  }}
+                  className="flex-1 h-11 rounded-xl border border-warm-200 text-warm-600 font-medium hover:bg-warm-50 transition-colors btn-press"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRestock}
+                  className="flex-1 h-11 rounded-xl bg-gradient-to-r from-primary-500 to-primary-600 text-white font-medium hover:from-primary-600 hover:to-primary-700 transition-all btn-press flex items-center justify-center gap-2"
+                >
+                  <RefreshCw size={16} />
+                  确认补货
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -541,6 +649,7 @@ function ProductCard({
   onEdit,
   onDelete,
   onToggleActive,
+  onRestock,
   supplierName,
 }: {
   product: Product;
@@ -548,15 +657,21 @@ function ProductCard({
   onEdit: () => void;
   onDelete: () => void;
   onToggleActive: () => void;
+  onRestock: () => void;
   supplierName: string;
 }) {
-  const progress = product.isActive && product.stock > 0 ? (product.sold / product.stock) * 100 : 0;
+  const isSoldOut = product.isActive && product.stockAvailable <= 0;
+  const progress = product.isActive && product.stock > 0 
+    ? isSoldOut 
+      ? 100 
+      : (product.sold / product.stock) * 100 
+    : 0;
 
   return (
     <div
       className={`bg-white rounded-2xl shadow-card overflow-hidden card-transition animate-slide-up relative ${
         !product.isActive ? 'opacity-70' : ''
-      }`}
+      } ${isSoldOut ? 'ring-2 ring-danger-400' : ''}`}
       style={{ animationDelay: `${index * 50}ms` }}
     >
       {!product.isActive && (
@@ -570,7 +685,21 @@ function ProductCard({
         </div>
       )}
 
-      <div className="relative h-32 bg-gradient-to-br from-warm-50 to-warm-100 flex items-center justify-center">
+      {isSoldOut && (
+        <div className="absolute inset-0 z-10 pointer-events-none">
+          <div className="absolute top-0 right-0 w-24 h-24 overflow-hidden">
+            <div className="absolute top-6 right-[-28px] rotate-[45deg] bg-danger-500 text-white text-xs font-bold px-8 py-1 shadow-lg">
+              已售罄
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className={`relative h-32 flex items-center justify-center ${
+        isSoldOut 
+          ? 'bg-gradient-to-br from-danger-50 to-danger-100' 
+          : 'bg-gradient-to-br from-warm-50 to-warm-100'
+      }`}>
         <span className="text-6xl">{product.image}</span>
         <div className="absolute top-3 left-3">
           <span className="px-2 py-1 bg-white/80 backdrop-blur-sm text-xs font-medium text-warm-600 rounded-lg">
@@ -578,20 +707,32 @@ function ProductCard({
           </span>
         </div>
         <div className="absolute top-3 right-3">
-          <button
-            onClick={onToggleActive}
-            className={`w-10 h-10 rounded-full flex items-center justify-center transition-all shadow-md ${
-              product.isActive
-                ? 'bg-danger-500 text-white hover:bg-danger-600 hover:scale-105'
-                : 'bg-success-500 text-white hover:bg-success-600 hover:scale-105'
-            }`}
-            title={product.isActive ? '点击下架' : '点击上架'}
-          >
-            {product.isActive ? <ArrowDownCircle size={20} /> : <ArrowUpCircle size={20} />}
-          </button>
+          {isSoldOut ? (
+            <button
+              onClick={onRestock}
+              className="w-10 h-10 rounded-full flex items-center justify-center transition-all shadow-md bg-primary-500 text-white hover:bg-primary-600 hover:scale-105"
+              title="点击补货"
+            >
+              <RefreshCw size={20} />
+            </button>
+          ) : (
+            <button
+              onClick={onToggleActive}
+              className={`w-10 h-10 rounded-full flex items-center justify-center transition-all shadow-md ${
+                product.isActive
+                  ? 'bg-danger-500 text-white hover:bg-danger-600 hover:scale-105'
+                  : 'bg-success-500 text-white hover:bg-success-600 hover:scale-105'
+              }`}
+              title={product.isActive ? '点击下架' : '点击上架'}
+            >
+              {product.isActive ? <ArrowDownCircle size={20} /> : <ArrowUpCircle size={20} />}
+            </button>
+          )}
         </div>
         <div className="absolute bottom-3 right-3">
-          <span className="px-2 py-1 bg-primary-500 text-white text-xs font-bold rounded-lg">
+          <span className={`px-2 py-1 text-white text-xs font-bold rounded-lg ${
+            isSoldOut ? 'bg-danger-500' : 'bg-primary-500'
+          }`}>
             限购{product.limitPerPerson}份
           </span>
         </div>
@@ -613,12 +754,20 @@ function ProductCard({
         {product.isActive && (
           <div className="mb-3">
             <div className="flex justify-between text-xs text-warm-500 mb-1">
-              <span>已售 {product.sold} / 库存 {product.stock}</span>
+              <span>
+                {isSoldOut ? '已售罄' : `已售 ${product.sold} / 库存 ${product.stock}`}
+              </span>
               <span>{progress.toFixed(0)}%</span>
             </div>
-            <div className="h-2 bg-warm-100 rounded-full overflow-hidden">
+            <div className={`h-2 rounded-full overflow-hidden ${
+              isSoldOut ? 'bg-danger-100' : 'bg-warm-100'
+            }`}>
               <div
-                className="h-full bg-gradient-to-r from-primary-400 to-primary-500 rounded-full transition-all duration-500"
+                className={`h-full rounded-full transition-all duration-500 ${
+                  isSoldOut 
+                    ? 'bg-gradient-to-r from-danger-400 to-danger-500' 
+                    : 'bg-gradient-to-r from-primary-400 to-primary-500'
+                }`}
                 style={{ width: `${Math.min(progress, 100)}%` }}
               />
             </div>
@@ -629,6 +778,13 @@ function ProductCard({
           <div className="mb-3 py-2 px-3 bg-danger-50 rounded-lg flex items-center gap-2">
             <XCircle size={14} className="text-danger-500" />
             <span className="text-xs text-danger-600 font-medium">商品已下架，点击右上角按钮重新上架</span>
+          </div>
+        )}
+
+        {isSoldOut && (
+          <div className="mb-3 py-2 px-3 bg-danger-50 rounded-lg flex items-center gap-2">
+            <RefreshCw size={14} className="text-danger-500" />
+            <span className="text-xs text-danger-600 font-medium">商品已售罄，点击右上角按钮补货</span>
           </div>
         )}
 

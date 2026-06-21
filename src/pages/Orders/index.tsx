@@ -19,31 +19,47 @@ import {
 import { useAppStore } from '../../store/useAppStore';
 import type { Order, PayStatus } from '../../types';
 
+type NeighborDisplayInfo = ReturnType<typeof useAppStore.getState>['getNeighborDisplayInfo'] extends (id: string) => infer R ? R : never;
+
 export default function OrdersPage() {
-  const { orders, currentDate, updateOrderPayStatus, getNeighborById } = useAppStore();
+  const { orders, currentDate, updateOrderPayStatus, getNeighborDisplayInfo } = useAppStore();
 
   const [buildingFilter, setBuildingFilter] = useState<string>('all');
   const [phoneSuffix, setPhoneSuffix] = useState('');
   const [payStatusFilter, setPayStatusFilter] = useState<string>('all');
   const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
 
+  const dayOrders = useMemo(() => orders.filter((o) => o.date === currentDate), [orders, currentDate]);
+
   const buildings = useMemo(() => {
-    const set = new Set(orders.map((o) => o.building));
+    const set = new Set<string>();
+    dayOrders.forEach((o) => {
+      const info = getNeighborDisplayInfo(o.neighborId);
+      if (info.building) {
+        set.add(info.building);
+      }
+    });
     return Array.from(set);
-  }, [orders]);
+  }, [dayOrders, getNeighborDisplayInfo]);
 
   const calcOrderItemsSum = (order: Order) =>
     order.items.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
   const filteredOrders = useMemo(() => {
-    let result = orders.filter((o) => o.date === currentDate);
+    let result = dayOrders;
 
     if (buildingFilter !== 'all') {
-      result = result.filter((o) => o.building === buildingFilter);
+      result = result.filter((o) => {
+        const info = getNeighborDisplayInfo(o.neighborId);
+        return info.building === buildingFilter;
+      });
     }
 
     if (phoneSuffix) {
-      result = result.filter((o) => o.phone.endsWith(phoneSuffix));
+      result = result.filter((o) => {
+        const info = getNeighborDisplayInfo(o.neighborId);
+        return info.phone.endsWith(phoneSuffix);
+      });
     }
 
     if (payStatusFilter !== 'all') {
@@ -51,12 +67,11 @@ export default function OrdersPage() {
     }
 
     return result.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }, [orders, currentDate, buildingFilter, phoneSuffix, payStatusFilter]);
+  }, [dayOrders, buildingFilter, phoneSuffix, payStatusFilter, getNeighborDisplayInfo]);
 
   const dateDisplay = format(new Date(currentDate), 'M月d日 EEEE', { locale: zhCN });
 
   const stats = useMemo(() => {
-    const dayOrders = orders.filter((o) => o.date === currentDate);
     const totalAmount = dayOrders.reduce((sum, o) => sum + calcOrderItemsSum(o), 0);
     return {
       total: dayOrders.length,
@@ -65,7 +80,7 @@ export default function OrdersPage() {
       refunded: dayOrders.filter((o) => o.payStatus === 'refunded').length,
       totalAmount,
     };
-  }, [orders, currentDate]);
+  }, [dayOrders]);
 
   const toggleExpand = (id: string) => {
     setExpandedOrder(expandedOrder === id ? null : id);
@@ -152,7 +167,7 @@ export default function OrdersPage() {
               expanded={expandedOrder === order.id}
               onToggle={() => toggleExpand(order.id)}
               onUpdatePayStatus={(status) => updateOrderPayStatus(order.id, status)}
-              neighbor={getNeighborById(order.neighborId)}
+              neighborInfo={getNeighborDisplayInfo(order.neighborId)}
             />
           ))
         ) : (
@@ -194,14 +209,14 @@ function OrderCard({
   expanded,
   onToggle,
   onUpdatePayStatus,
-  neighbor,
+  neighborInfo,
 }: {
   order: Order;
   index: number;
   expanded: boolean;
   onToggle: () => void;
   onUpdatePayStatus: (status: PayStatus) => void;
-  neighbor?: ReturnType<typeof useAppStore.getState>['getNeighborById'] extends (id: string) => infer R ? R : never;
+  neighborInfo: NeighborDisplayInfo;
 }) {
   const payStatusConfig = {
     paid: { label: '已支付', color: 'bg-success-50 text-success-600', icon: CheckCircle },
@@ -222,6 +237,10 @@ function OrderCard({
   const itemsSum = order.items.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const amountMatch = Math.abs(itemsSum - order.totalAmount) < 0.01;
 
+  const maskedPhone = neighborInfo.phone.length >= 11
+    ? `${neighborInfo.phone.slice(0, 3)}****${neighborInfo.phone.slice(-4)}`
+    : neighborInfo.phone;
+
   return (
     <div
       className="bg-white rounded-2xl shadow-card overflow-hidden animate-slide-up card-transition"
@@ -231,7 +250,7 @@ function OrderCard({
         <div className="flex items-start justify-between">
           <div className="flex items-start gap-3 flex-1 min-w-0">
             <div className="w-10 h-10 rounded-xl bg-primary-50 flex items-center justify-center text-xl flex-shrink-0">
-              {neighbor?.avatar || '🛒'}
+              {neighborInfo.avatar || '🛒'}
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -246,21 +265,19 @@ function OrderCard({
                 </span>
               </div>
               <div className="flex items-center gap-3 text-sm text-warm-500 flex-wrap">
-                {neighbor && (
-                  <span className="flex items-center gap-1">
-                    <span className="font-medium text-warm-700">{neighbor.name}</span>
-                    {neighbor.remark && (
-                      <span className="text-warm-400">（{neighbor.remark}）</span>
-                    )}
-                  </span>
-                )}
+                <span className="flex items-center gap-1">
+                  <span className="font-medium text-warm-700">{neighborInfo.name}</span>
+                  {neighborInfo.remark && (
+                    <span className="text-warm-400">（{neighborInfo.remark}）</span>
+                  )}
+                </span>
                 <span className="flex items-center gap-1">
                   <Building2 size={14} />
-                  {order.building} {order.room}
+                  {neighborInfo.building} {neighborInfo.room}
                 </span>
                 <span className="flex items-center gap-1">
                   <Phone size={14} />
-                  {order.phone.slice(0, 3)}****{order.phone.slice(-4)}
+                  {maskedPhone}
                 </span>
               </div>
             </div>
